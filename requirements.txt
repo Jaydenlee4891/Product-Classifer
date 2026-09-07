@@ -1,0 +1,14 @@
+# Install torch separately first, matching your CUDA version: https://pytorch.org
+# GTX 1660 Ti note: Turing, compute capability 7.5 — no bf16, no FlashAttention-2.
+# Use fp16 (recall.py does this automatically on CUDA) and PyTorch's built-in SDPA.
+
+sentence-transformers>=3.0.0
+transformers>=4.51.0
+pandas>=2.0.0
+pyarrow>=14.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+tqdm>=4.66.0
+
+# only needed for `label_docs.py --describe`
+anthropic>=0.40.0

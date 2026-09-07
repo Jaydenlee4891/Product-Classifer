@@ -1,0 +1,10 @@
+# ABO is CC BY-NC 4.0 — do not redistribute the corpus through this repo.
+data/
+figs/
+*.npy
+*.parquet
+
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
