@@ -17,6 +17,11 @@ SEED = 17
 N_ZERO_SHOT_LEAVES = 30
 STRATA = [("head", 1000, None), ("torso", 100, 999), ("tail", 10, 99), ("few_shot", 1, 9)]
 
+# Node paths carry no language tag, so the root segment is the only language signal.
+# Non-English roots observed in ABO: /Categorías /Kategorien /カテゴリー別 /Catégories
+# /Categorie /Categorieën /Kategorier /Kategoriler
+ENGLISH_NODE_ROOTS = ("/Categories/", "/Departments/", "/Products/", "/Home & Garden/")
+
 
 def find_listing_files(raw: Path) -> list[Path]:
     files = sorted(raw.rglob("listings_*.json.gz"))
@@ -78,27 +83,36 @@ def first_value(field) -> str | None:
 
 
 def node_path(field) -> str | None:
-    """Longest English browse path, e.g. '/Categories/Cell Phones & Accessories/Cases'."""
+    """Deepest English browse path, e.g. '/Categories/Cell Phones & Accessories/Cases'.
+
+    ABO's `node` entries carry NO language_tag — verified across all 169,347 entries —
+    so language has to be inferred from the root segment. Roughly 30% of paths are
+    Spanish, German, Japanese, French, Dutch, Swedish or Turkish, and non-English roots
+    are often the longest, so picking by length alone silently mixes languages into the
+    label documents. Whitelist the English roots instead.
+    """
     if not isinstance(field, list):
         return None
     names = [
         e["node_name"].strip()
         for e in field
         if isinstance(e, dict)
-        and e.get("node_name")
-        and str(e.get("language_tag", "en_US")).startswith("en")
+        and isinstance(e.get("node_name"), str)
+        and e["node_name"].startswith(ENGLISH_NODE_ROOTS)
     ]
     return max(names, key=len) if names else None
 
 
 def parse(files: list[Path]) -> pd.DataFrame:
-    rows, skipped = [], Counter()
+    rows, skipped, all_leaves = [], Counter(), set()
     for path in files:
         with gzip.open(path, "rt", encoding="utf-8") as f:
             for line in f:
                 rec = json.loads(line)
                 pt = first_value(rec.get("product_type"))
                 name = pick_en(rec.get("item_name"))
+                if pt:
+                    all_leaves.add(pt)
                 if not pt:
                     skipped["no_product_type"] += 1
                     continue
@@ -123,8 +137,14 @@ def parse(files: list[Path]) -> pd.DataFrame:
                         "main_image_id": rec.get("main_image_id") or "",
                     }
                 )
-    print(f"Parsed {len(rows):,} items. Skipped: {dict(skipped)}\n")
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    lost = len(all_leaves) - df.product_type.nunique()
+    print(f"Parsed {len(rows):,} items. Skipped: {dict(skipped)}")
+    print(
+        f"Leaves: {len(all_leaves)} in the raw data, {df.product_type.nunique()} survive the "
+        f"English-name filter ({lost} lost entirely — every item in them was non-English).\n"
+    )
+    return df
 
 
 def split(df: pd.DataFrame) -> pd.DataFrame:
@@ -243,6 +263,18 @@ def main() -> None:
     print(f"\n{len(df):,} items · {df.product_type.nunique()} leaves\n")
     print(summary.to_string())
     summary.to_csv(args.out / "strata.csv")
+
+    share = df.product_type.value_counts(normalize=True)
+    print(f"\nConcentration — top 5 leaves are {share.head(5).sum():.1%} of the corpus:")
+    for pt, s in share.head(5).items():
+        print(f"  {s:6.1%}  {pt}")
+    print(
+        "  A single-class baseline scores the top row's share. Quote macro-averaged\n"
+        "  metrics, not accuracy, or you are reporting that baseline back to yourself."
+    )
+
+    no_path = (df.node_path == "").mean()
+    print(f"\n{no_path:.1%} of items have no English browse path (v2_path == v1_name for those leaves).")
 
     thin = summary[(summary.leaves > 0) & (summary.val_items < 20)]
     if not thin.empty:
