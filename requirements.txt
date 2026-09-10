@@ -12,3 +12,4 @@ tqdm>=4.66.0
 
 # only needed for `label_docs.py --describe`
 anthropic>=0.40.0
+scikit-learn>=1.3.0

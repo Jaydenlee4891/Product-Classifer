@@ -8,3 +8,13 @@ figs/
 __pycache__/
 *.pyc
 .DS_Store
+.vscode/
+
+# credentials — never commit
+.env
+.env.*
+*.key
+
+# scratch and unrelated projects that live in this folder
+Claude outputs/
+Manware-s-AI-Learning-Toolkit/

@@ -264,6 +264,14 @@ def main() -> None:
     print(summary.to_string())
     summary.to_csv(args.out / "strata.csv")
 
+    n_zs = int(df[df.stratum == "zero_shot"].product_type.nunique())
+    print(
+        f"\nzero_shot is {n_zs} leaves, not {len(zero_shot)}: {len(zero_shot)} deliberately held "
+        f"out plus {n_zs - len(zero_shot)} that reached zero training items on their own "
+        "(leaves so rare their only item went to test). Both are genuinely unseen at train "
+        "time, so both belong in the stratum — but say which is which if asked."
+    )
+
     share = df.product_type.value_counts(normalize=True)
     print(f"\nConcentration — top 5 leaves are {share.head(5).sum():.1%} of the corpus:")
     for pt, s in share.head(5).items():
