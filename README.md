@@ -1,47 +1,358 @@
-# Long-Tail Cascade Classifier — Stage 2 retrieval gate
+# Long-Tail Cascade Classifier
 
-Design doc: https://claude.ai/code/artifact/97782eb2-444f-4322-8a8b-2aba479ce914
+A four-tier classifier for taxonomies where most labels are rare and some have no training
+data at all. Each tier answers what it can and defers the rest, so cost and capability rise
+only for the items that need them.
 
-This repo implements **build steps 1–2** of the design: the data audit and the retrieval
-gate. That gate is the ceiling on the whole cascade — no downstream stage can recover a
-label the retriever never surfaced — so it is both the first thing to measure and the first
-thing worth showing.
+**Result on 12,200 held-out items across 530 leaves: micro 0.895, macro 0.647.**
+A TF-IDF + LinearSVC baseline on the same items scores micro 0.919, macro 0.507 — the
+cascade wins macro by **+0.140** and loses micro by 0.024. Where that trade comes from is
+the whole story, and it is in [Results](#results).
 
-**No training. No API spend. Runs on a laptop.**
+Every number in this README comes from a run whose artefacts are on disk. Where a decision
+was made, the measurement that settled it is given next to it.
 
-## The result this produces
+---
 
-Macro-averaged recall@20: **label-document variant × label-frequency stratum**, over ABO's
-576 `product_type` leaves, using a frozen off-the-shelf embedder.
+## The problem
 
-The claim it tests: *a taxonomy leaf is retrievable in proportion to how much its own text
-says about it.* A leaf named `ACCESSORY` is unfindable. The same leaf carrying its ancestor
-path and three real product titles is findable — including at zero training examples, which
-is the case a softmax classifier cannot handle at all.
+Real taxonomies are Zipfian. In Amazon Berkeley Objects, one leaf is 44% of the corpus and
+231 leaves have fewer than ten items. Two consequences shape everything here:
 
-## What ABO actually contains (verified, not assumed)
+**Accuracy is meaningless.** Predicting `CELLULAR_PHONE_CASE` for everything scores 53%
+micro. Every metric below is reported micro (per item) *and* macro (per leaf), and **macro
+is the one to read** — micro is close to a report on that single class.
 
-| | |
-|---|---|
-| Records | 147,702 across 16 gzipped files, 84 MB |
-| Leaves (`product_type`) | 576 |
-| English `item_name` | 83.1% — the rest are dropped |
-| Has a browse `node` | 95.3% (72.6% with an English path) |
-| **Largest leaf** | **`CELLULAR_PHONE_CASE` = 44% of the corpus** |
-| Top 5 leaves | 63% of the corpus |
-| Leaves with <10 items | 231 of 576 |
-| Singleton leaves | 58 |
+**A softmax classifier cannot represent a label it never saw.** Not "does badly on" —
+cannot represent. A flat classifier's score on genuinely unseen leaves is 0.000 by
+construction, and no amount of training data for other classes changes that.
 
-**Two consequences worth understanding before you read any number this repo prints.**
+The cascade exists for the second point. Everything else is engineering around it.
 
-*Accuracy is meaningless here.* Predicting `CELLULAR_PHONE_CASE` for everything scores 44%.
-Every metric is reported both micro-averaged (per item) and macro-averaged (per leaf), and
-**macro is the one to quote** — micro is close to a report on that single class. The gate
-uses macro.
+---
 
-*ABO is a phone-case dataset with a long tail attached.* That makes it a good stress test
-for the tail and a poor proxy for a balanced production taxonomy. Say so before an
-interviewer notices it.
+## Architecture
+
+```
+item ──▶ S1  DistilBERT over 69 head classes + OTHER
+         │   answers 83.5% of items at 0.977 accuracy
+         │   defers when  argmax == OTHER  OR  p_max < 0.900
+         ▼
+        S2  frozen Qwen3-Embedding-0.6B retrieves top-50 label documents
+         │   fine-tuned MiniLM cross-encoder rescores them
+         │   the two orderings are INTERLEAVED into a 10-candidate shortlist
+         ▼
+        S3  an LLM reads the shortlist and picks one leaf, or abstains
+```
+
+S2 never emits a final label in the shipped configuration. Its entire contribution is the
+shortlist it hands to S3 — it is a candidate generator, not a classifier.
+
+---
+
+## Data
+
+ABO listings metadata, audited rather than trusted:
+
+| | raw | after filtering |
+|---|---|---|
+| Records | 147,702 | **121,133** |
+| Leaves (`product_type`) | 576 | **530** |
+| English `item_name` | 83.1% | 100% |
+| Largest leaf | `CELLULAR_PHONE_CASE`, 44% | 53.5% of train |
+
+Splits are **80/10/10 stratified per leaf**, seed 17 — train 96,857 / val 12,076 /
+test 12,200. Leaves with fewer than three items send one item to test and keep the rest in
+train, so **every leaf lands at least one test row**. Without that floor the rare strata
+would be computed from nothing.
+
+### Frequency strata
+
+Assigned by post-holdout training frequency. The thresholds are a convention chosen in
+advance; the distribution is ABO's.
+
+| stratum | rule | leaves | actual train counts |
+|---|---|---|---|
+| head | ≥ 1000 | 7 | 1,149 – 51,808 |
+| torso | 100 – 999 | 62 | 100 – 970 |
+| tail | 10 – 99 | 182 | 10 – 97 |
+| few_shot | 1 – 9 | 189 | 1 – 9 |
+| zero_shot | 0 | 90 | 0 |
+
+**Every boundary falls in an empty gap.** Nothing exists between 971 and 1,148, or between
+98 and 99. The cuts can move within those gaps without a single leaf changing stratum, so
+the strata are not an artifact of where the knife went.
+
+### Two things the data forced
+
+**Node paths carry no language tag.** All 169,347 `node` entries lack the `language_tag`
+key that ABO's other localised fields use. About 30% of paths are Spanish, German, Japanese,
+French, Dutch, Swedish or Turkish (`/Categorías`, `/カテゴリー別`, `/Kategorien`, …), and the
+non-English ones are frequently the longest. Selecting the longest path would have silently
+mixed languages into the label documents. `prepare.py` whitelists English roots instead.
+
+**The zero-shot stratum is constructed, not found.** Every `product_type` in ABO has at
+least one item, so no true zero-shot stratum exists. `prepare.py` deletes every *training*
+row for 30 leaves while keeping their val/test rows and their label documents; 60 more
+leaves arrive naturally as singletons whose only item went to test. 90 total — unreachable
+by any supervised classifier, reachable only through label text.
+
+### Label noise, measured
+
+121,133 rows hold only 120,417 unique `item_id`s: **716 duplicates, 216 exact repeats, 56
+filed under two different leaves.** No leakage — split assignment is keyed on `item_id`, so
+all rows sharing an id land in the same split (verified: 0 ids span more than one split).
+
+The taxonomy also contradicts itself. Gold `EYEWEAR` on an item whose own ABO path ends in
+*Sunglasses*; `WASHER_DRYER_COMBINATION` and `LAUNDRY_APPLIANCE` on an identical path. Some
+fraction of the remaining error is unwinnable, which bounds the ceiling below 1.0.
+
+Deduping would mean re-splitting, invalidating every measurement, to move 0.6% of rows.
+Known and left alone.
+
+---
+
+## Design decisions
+
+Each was settled by a run, not a preference.
+
+| Decision | Value | Evidence |
+|---|---|---|
+| S1 model | DistilBERT, max_len 128, batch 32, lr 3e-5, 3 epochs | fits a 6GB card; fp16 + GradScaler (no bf16 below CC 8.0) |
+| S1 label space | 69 head classes + `OTHER` | cut at ≥100 train items — every such class works, F1 collapses below 30 |
+| S1 deferral | `argmax == OTHER` **or** `p_max < 0.900` | τ fitted on **val** at a 98% precision target |
+| S1 operating point | 83.5% answered, 0.977 accuracy, deferral recall 0.849 | on **test**, at the τ val chose |
+| Class weighting | **none** | `sqrt` gives +0.005 macro-F1 and loses every cascade metric |
+| Retriever | Qwen3-Embedding-0.6B, **frozen** | macro recall@50 = 0.977 with no fine-tuning |
+| Retrieval depth | K = 50 | macro@50 0.977 vs macro@20 0.946 — widening is free |
+| Label document | `v3_proto` = name + ancestor path + prototype titles | macro@50 0.977 vs 0.945 for path alone; prototypes drawn from train only |
+| Reranker | ms-marco-MiniLM-L-6-v2, 2 epochs, listwise, 200/leaf cap, group 8, max_len 192 | hard negatives mined from the retriever's own top-50 |
+| Shortlist | **fused**, m = 10 | macro recall@10 — fused 0.931, bi 0.919, cross 0.760 |
+| S3 | forced `record_category` tool call, categorical confidence, shuffled candidates, 2-shot including an abstention | 0 hallucinated leaf ids in 2,015 answers |
+
+### Why τ is fitted on val
+
+An earlier version computed the threshold table over val and test pooled and reported on the
+same pool — selecting a threshold using the set it is then reported on. Refitting on val
+alone moves τ from 0.925 to 0.900, and test lands at 0.977 against the 0.980 val met.
+**Selection optimism: 0.003 accuracy, 0.017 deferral recall.** Small, but the procedure was
+wrong and the fix is free — `stage1.py --from-probs` re-reports a finished run from saved
+probabilities without retraining.
+
+### Why the shortlist is fused
+
+The fine-tuned cross-encoder **fails its own gate**. Macro recall@10 is 0.760 against the
+frozen retriever's 0.919; on zero-shot it reaches 0.124, below the 0.200 you would get by
+shuffling its 50 candidates at random. Its gate says drop the tier.
+
+But it is sharply right where it has data, and interleaving the two orderings keeps both:
+
+| stratum | bi | cross | fused |
+|---|---|---|---|
+| head | 0.740 | 0.887 | **0.877** |
+| torso | 0.884 | 0.962 | **0.958** |
+| tail | 0.920 | 0.931 | **0.937** |
+| few_shot | 0.958 | 0.825 | **0.952** |
+| zero_shot | 0.876 | **0.124** | **0.860** |
+| **ALL** | 0.919 | 0.760 | **0.931** |
+
+Fusing costs 0.006 on few_shot and 0.016 on zero_shot and buys 0.137 on head and 0.074 on
+torso. The cross-encoder is not a shortlist producer; it is a complement to a retriever that
+never learned which labels are rare.
+
+### Three label-document renderings, not one
+
+Each tier reads label documents in the exact form the run that measured it used: retrieval
+the full untruncated document, the reranker the variant recorded in **its own checkpoint's**
+`run_config.json`, the agent its own prompt rendering. Collapsing them silently swaps a
+measured tier for an unmeasured one. `pipeline.py` reads the reranker's variant and
+`max_len` from the checkpoint rather than assuming them.
+
+---
+
+## Results
+
+### End to end — 12,200 test items, 530 leaves
+
+| stratum | n | leaves | micro | macro |
+|---|---|---|---|---|
+| head | 8,792 | 7 | 0.951 | 0.805 |
+| torso | 2,355 | 62 | 0.817 | 0.794 |
+| tail | 620 | 182 | 0.674 | 0.662 |
+| few_shot | 189 | 189 | 0.693 | 0.693 |
+| zero_shot | 244 | 90 | 0.357 | 0.407 |
+| **ALL** | **12,200** | **530** | **0.895** | **0.647** |
+
+### Stage attribution — who decided, and were they right
+
+```
+      stage   share   micro   macro
+         S1   83.5%   0.977   0.394
+         S3   15.3%   0.522   0.715
+ S3-abstain    1.3%   0.000   0.000
+```
+
+Read the share and the accuracy together. **S1 answers 83.5% of items at 0.977 accuracy and
+0.394 macro** — a per-item winner and a per-leaf loser, because the rare items it wrongly
+keeps are spread across many leaves that each score zero. S3 is the mirror image. That gap
+is the entire case for the cascade in one line: a system reporting only micro would show
+97.7% at the first tier and nobody would build the rest.
+
+### Against the baseline, same 12,200 items
+
+| stratum | TF-IDF micro | cascade | TF-IDF macro | cascade | Δ macro |
+|---|---|---|---|---|---|
+| head | **0.981** | 0.951 | **0.917** | 0.805 | −0.112 |
+| torso | **0.874** | 0.817 | **0.849** | 0.794 | −0.055 |
+| tail | **0.721** | 0.674 | **0.696** | 0.662 | −0.034 |
+| few_shot | 0.439 | **0.693** | 0.439 | **0.693** | **+0.254** |
+| zero_shot | 0.000 | **0.357** | 0.000 | **0.407** | **+0.407** |
+| **ALL** | **0.919** | 0.895 | 0.507 | **0.647** | **+0.140** |
+
+**A four-tier system with a 600M retriever, a fine-tuned reranker and an LLM loses to word
+and character n-grams in a linear SVM on head, torso *and* tail.** The entire macro win is
+few_shot and zero_shot.
+
+Zero-shot is not a close contest but a categorical one: TF-IDF scores exactly 0.000 and
+cannot do otherwise. The cascade reaches 0.407 because retrieval matches against label
+*text*. That is not "better at the tail" — it is *defined at all* in a regime where the
+baseline is not.
+
+**The design finding this forces.** S1's head cut was set at ≥100 training items from
+DistilBERT's per-class F1 knee. That knee is a property of DistilBERT, not of supervised
+learning: TF-IDF still reaches 0.696 macro on leaves with 10–99 examples, where the cascade
+— which defers all of them — gets 0.662. **The cut was calibrated to the wrong model.** The
+system this evidence argues for is a cheap supervised tier over all 440 trainable leaves,
+with retrieval and the agent reserved for the 90 leaves that genuinely have no training data.
+
+### Stage 3, paired against its own shortlist's top candidate
+
+McNemar exact, two-sided, on all 2,015 escalated items:
+
+```
+   stratum     n  agent   top1     net  a>t  t>a        p
+      head   408  0.034  0.076  -0.042    7   24   0.0033 **
+     torso   708  0.455  0.304  +0.151  148   41   0.0000 ***
+      tail   581  0.719  0.670  +0.050   72   43   0.0087 **
+  few_shot   169  0.775  0.734  +0.041   21   14   0.3105
+ zero_shot   149  0.584  0.430  +0.154   39   16   0.0027 **
+       ALL  2015  0.482  0.408  +0.074  287  138   0.0000 ***
+```
+
+The shortlist contains the gold leaf 90.6% of the time. On head the agent is significantly
+*worse* than its own shortlist's top candidate — the only negative sign in the table.
+
+---
+
+## Findings
+
+### 1. Anything trained on the observed label distribution suppresses the unobserved tail
+
+Three independent demonstrations in one system:
+
+- `OTHER` catches 79% of tail and 73% of few-shot items but only **31%** of zero-shot.
+- The fine-tuned reranker drops zero-shot to macro recall@10 = **0.124**.
+- `sqrt` class weighting improved head/torso deferral and made tail deferral **worse**
+  (0.796 → 0.696).
+
+The mechanism for `OTHER` is exact: it was trained on **6,397 rows — 5,793 tail, 604
+few-shot, 0 zero-shot.** It is a learned class whose training set *is* the tail. It
+recognises unseen items of seen tail leaves. It cannot recognise an unseen leaf.
+
+**Consequence:** the frozen retriever is load-bearing precisely *because* it never learned
+the label distribution. Freezing it was not a concession to a 6GB card.
+
+### 2. The cross-encoder's problem is mostly capacity, not fine-tuning
+
+The off-the-shelf checkpoint — never trained on ABO — already loses everywhere (macro
+recall@10, 4k subsample: 0.728 vs the retriever's 0.915). `ms-marco-MiniLM-L-6-v2` is 22.7M
+parameters trained on web passage ranking, against a ~595M instruction-tuned retriever.
+Joint attention does not cover a 26× gap.
+
+Fine-tuning then *steepens an existing tilt*. Mean position of a candidate in the 50-item
+list, by its leaf's training frequency:
+
+```
+                 zs   1-10   -100    -1k    >1k     span
+bi (control)   27.3   28.0   25.4   21.8   15.1     12.2
+off-shelf CE   32.4   24.8   20.9   19.5   17.9     14.5
+fine-tuned CE  40.0   28.4   17.6    8.8    3.3     36.7
+```
+
+Every scorer mildly prefers common leaves — partly because common leaves are common
+*because* they are broad, so their label documents match more text. Fine-tuning turns a
+14.5-position tilt into a 36.7-position one.
+
+### 3. τ cannot do tail work — it is structurally the wrong instrument
+
+Who defers what, at τ = 0.90:
+
+```
+   stratum      n  by OTHER   by tau    kept | gold in S1's label space
+      head  17557      0.9%     4.0%   95.1% |      100.0%
+     torso   4718      4.0%    25.3%   70.7% |      100.0%
+      tail   1242     79.1%    15.4%    5.6% |        0.0%
+  few_shot    334     72.8%    18.0%    9.3% |        0.0%
+ zero_shot    425     31.1%    28.2%   40.7% |        0.0%
+```
+
+τ's largest contribution is **torso**. And where it is most needed it is actively fooled —
+when S1 is wrong and does not say `OTHER`, zero-shot errors carry the *highest* confidence
+(mean p_max 0.845; 59% above 0.9; 9% above 0.99, against head's 0.742 / 24.7% / 1.7%).
+
+Max-softmax measures how peaked the distribution is over the 69 classes S1 knows. It does
+not measure whether the true answer is among them. **`OTHER` is the tail router, τ is the
+torso trimmer, and nothing in S1 is a novel-leaf detector.**
+
+### 4. Macro-F1 chose the wrong model
+
+`sqrt` class weighting scores +0.005 macro-F1 (0.830 → 0.835) and loses every cascade metric
+at the operating point — fewer items answered, lower accuracy, lower deferral recall, all at
+once. The metric that describes a *classifier* is not the metric that describes a
+classifier's *role in a cascade*, and you only see the difference if you measure the role.
+`head69_sqrt` is kept on disk as the evidence.
+
+### 5. A 26-item table said the opposite of the truth
+
+An early Stage 3 run on 300 items showed zero-shot at −0.106 against the shortlist's top
+candidate. It was written up as a regression, a mechanism was proposed, and a $0.40 ablation
+was run to fix it. The same measurement at two sample sizes:
+
+```
+  n= 26 : -0.106   discordant  3 vs  6   p=0.508
+  n=149 : +0.154   discordant 39 vs 16   p=0.0027
+```
+
+Same system, same configuration, **opposite conclusion** — and the original rested on three
+items. Macro averaging hid it: with 18 leaves inside 26 items, one item moving shifts macro
+by 0.04. The failure was not the small sample; it was reporting a per-stratum table without
+its discordant counts beside it. The ablation is retained as a documented null result
+(p=0.804, 16 of 300 items changed).
+
+---
+
+## Repository
+
+```
+src/prepare.py           ABO → items.parquet, splits, strata, zero-shot construction
+src/label_docs.py        4 cumulative label-document variants; --describe adds descriptions
+src/recall.py            retrieval gate — recall@k per variant per stratum
+src/baselines.py         majority + TF-IDF/SGD or LinearSVC floor
+src/stage1.py            S1 training, deferral table, funnel; --from-probs re-reports free
+src/stage2_rerank.py     negative mining, listwise training, recall@m gate
+src/stage2_conformal.py  split conformal prediction sets      ← never executed
+src/stage3_agent.py      Batch API agent tier, ablations, --dry-run
+src/shortlist.py         the one shortlist implementation, shared by both callers
+src/pipeline.py          Cascade object + end-to-end evaluation with stage attribution
+src/test_pipeline.py     21 assertions, no model required
+```
+
+`shortlist.py` exists because the shortlist was implemented twice and the two drifted — a
+results file produced against a cross-only shortlist was folded into a fused-mode evaluation
+before that was caught. Results now carry `shortlist_mode` and `tau` columns, and
+`pipeline.py` warns on a mismatch.
+
+---
 
 ## Setup
 
@@ -51,9 +362,7 @@ python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\act
 pip install -r requirements.txt
 ```
 
-The `source` line is the one people skip. Your prompt should show `(.venv)`.
-
-## Download ABO listings (84 MB)
+### Download ABO listings (84 MB)
 
 Metadata only — the 3D models and turntable images are ~100 GB and are not needed.
 
@@ -64,72 +373,88 @@ tar -xf abo-listings.tar
 cd ..
 ```
 
-`prepare.py` searches recursively for `listings_*.json.gz`, so the exact nesting under
-`--raw` does not matter.
+ABO is **CC BY-NC 4.0** — non-commercial use, attribution required. `.gitignore` keeps
+`data/` out of the repo; do not remove that line. Model checkpoints (~265 MB S1, ~90 MB S2)
+also stay out. The API key lives in the environment, never in code.
 
-ABO is CC BY-NC 4.0 — non-commercial use, attribution required. `.gitignore` keeps `data/`
-out of the repo; do not remove that line.
+---
 
 ## Run
 
-```bash
-python src/prepare.py    --raw data --out data          # ~3-5 min
-python src/label_docs.py --data data                    # seconds
-python src/recall.py     --data data --limit 2000       # smoke test, ~2 min
-python src/recall.py     --data data                    # real numbers
-```
-
-`recall.py` downloads Qwen3-Embedding-0.6B on first run (~1.2 GB, once). It picks CUDA,
-then MPS, then CPU. `--limit` subsamples for a plumbing check — the rare strata end up with
-too few items to trust, so never quote numbers from a limited run.
-
-Optional, ~$0.60 and an `ANTHROPIC_API_KEY`, adds a fourth label-doc variant:
+Free, no API spend:
 
 ```bash
-python src/label_docs.py --data data --describe
+python src/prepare.py       --raw data --out data              # ~3-5 min
+python src/label_docs.py    --data data
+python src/recall.py        --data data                        # the retrieval gate
+python src/baselines.py     --data data --split test           # the floor
+python src/stage1.py        --data data --head-cut 69          # ~40 min on GPU
+python src/stage2_rerank.py --data data                        # train + score
+python src/test_pipeline.py
 ```
 
-## What each step gives you
+Costs money and needs `ANTHROPIC_API_KEY`:
 
-| Step | Output | Why it matters |
-|---|---|---|
-| `prepare.py` | `data/items.parquet`, `data/strata.csv`, `figs/frequency.png` | The long tail, drawn. Confirms the strata are populated enough to measure anything. |
-| `label_docs.py` | `data/label_docs.json` | Four variants of the highest-leverage artifact in the system. |
-| `recall.py` | `data/recall.csv` + printed table | **The gate.** macro@20 ≥ 0.95 overall and ≥ 0.85 on tail means the retriever needs no fine-tuning. |
+```bash
+python src/label_docs.py    --data data --describe             # ~$0.60, optional
+python src/stage3_agent.py  --data data --dry-run              # free, prints one prompt
+python src/stage3_agent.py  --data data --limit 300            # ~$0.40
+python src/stage3_agent.py  --data data                        # ~$2.70, all 2,015
+```
 
-## Two things the data forced
+End to end:
 
-Both were found by checking ABO rather than trusting its documentation, and both are worth
-mentioning if anyone asks how carefully this was built.
+```bash
+python src/pipeline.py --data data --evaluate --save-config
+python src/pipeline.py --data data --evaluate --with-llm
+```
 
-**Node paths carry no language tag.** All 169,347 `node` entries lack the `language_tag`
-key that ABO's other localised fields use. About 30% of paths are Spanish, German, Japanese,
-French, Dutch, Swedish or Turkish (`/Categorías`, `/カテゴリー別`, `/Kategorien`, …), and the
-non-English ones are frequently the longest. Selecting the longest path would have silently
-mixed languages into the label documents. `prepare.py` whitelists English roots instead.
+`recall.py` downloads Qwen3-Embedding-0.6B on first run (~1.2 GB, once). Device selection is
+CUDA → MPS → CPU. `--limit` subsamples for a plumbing check; the rare strata end up with too
+few items to trust, so never quote numbers from a limited run — see finding 5.
 
-**The zero-shot stratum is constructed, not found.** Every `product_type` in ABO has at
-least one item, so no true zero-shot stratum exists. `prepare.py` builds one: it deletes
-every *training* row for 30 leaves while keeping their val/test rows and their label
-documents. Those leaves become unreachable by any supervised classifier and reachable only
-through label text. `label_docs.py` prints the count of leaves with no prototypes as a
-consistency check — it should equal 30.
+Hardware target is a **GTX 1660 Ti (6 GB, compute capability 7.5)**: fp16 + GradScaler, no
+bf16, no FlashAttention-2, and the 0.6B retriever runs frozen at inference only. Runs
+reported here were on Apple Silicon via MPS, where the cross-encoder scores ~82 pairs/sec —
+the full 610,000-pair test pass takes about two hours.
 
-## Reading the table in an interview
+---
 
-The interesting comparison is not the headline number, it is the **shape across columns**.
-Expect name-only to hold up on head classes and fall away toward the tail, with the gap
-between variants widening as frequency drops. That gap is the argument for treating labels
-as documents rather than as output slots — the reason Stage 2 is retrieval and not a second
-classifier.
+## Known limitations
 
-If macro@20 is high everywhere, including name-only, say so plainly: ABO's `product_type`
-names are unusually self-describing, the task is easier than a production taxonomy, and the
-result will not transfer to a Korean corpus with terser category names. Volunteering that
-caveat is worth more than a good number without it.
+- **Batch scoring only.** No serving path, no latency budget, no monitoring.
+- **`stage2_conformal.py` has never been executed.** Split conformal prediction sets are
+  implemented and unmeasured.
+- **Abstention targeting is weak**: 7.6% rate, 25.3% recall, 31.4% precision, and 105
+  answerable items refused — 5.2% of the escalated run discarded for nothing. The largest
+  single pool of recoverable error in the system.
+- **The generated label descriptions have never been gated.** `recall.csv` predates the
+  `--describe` run, so macro@50 = 0.977 belongs to `v3_proto`; `v4_desc` is untested for
+  retrieval.
+- **The baseline comparison is point estimates.** `baselines.py` now writes per-item
+  predictions so it can be run as a paired test; that test has not been run.
+- **ABO is a phone-case dataset with a long tail attached.** Good stress test for the tail,
+  poor proxy for a balanced production taxonomy.
 
-## Not implemented yet
+## Next
 
-Stage 0 (LLM labelling), Stage 1 (BERT + `OTHER`), Stage 2's cross-encoder rerank and
-conformal calibration, Stage 3 (LLM adjudication), and the Korean arms. All specified in
-the design doc.
+1. Widen S1's label space beyond 69 leaves, or put a linear model behind the classes
+   DistilBERT cannot reach — the change the baseline comparison argues for.
+2. Fix abstention targeting.
+3. Route head-stratum deferrals around S3.
+4. Energy or max-logit as the deferral score instead of max-softmax — one inference pass,
+   and it attacks finding 3 directly.
+5. A larger reranker (`bge-reranker-base`, 278M) — the direct answer to finding 2.
+
+---
+
+## What this project demonstrates
+
+Not that the classifier works. Every tier has a measured failure attached: the cross-encoder
+loses to the retriever it was built to improve, `OTHER` cannot see novel leaves, the agent is
+significantly worse than its own shortlist on head, and the whole cascade loses to n-grams on
+four strata out of five.
+
+It wins overall macro by 0.140 anyway, because those failures do not overlap and because one
+stratum is a regime the baseline cannot enter at all. Knowing which is which — and being able
+to name the simpler system the evidence supports — is the point.
