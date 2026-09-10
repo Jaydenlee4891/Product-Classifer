@@ -55,12 +55,16 @@ def main() -> None:
     ap.add_argument("--fast", action="store_true",
                     help="SGDClassifier instead of LinearSVC — minutes instead of tens of minutes, "
                          "slightly worse. Use it for a first look.")
+    ap.add_argument("--split", default="val+test", choices=["val", "test", "val+test"],
+                    help="which split to score. Use 'test' to compare against pipeline.py — "
+                         "a baseline scored on val+test cannot sit in the same table as a "
+                         "cascade scored on test.")
     args = ap.parse_args()
 
     df = pd.read_parquet(args.data / "items.parquet")
     train = df[df.split == "train"]
-    ev = df[df.split.isin(["val", "test"])].reset_index(drop=True)
-    print(f"train {len(train):,} / eval {len(ev):,} · "
+    ev = df[df.split.isin(args.split.split("+"))].reset_index(drop=True)
+    print(f"train {len(train):,} / eval {len(ev):,} ({args.split}) · "
           f"{train.product_type.nunique()} trainable leaves of {df.product_type.nunique()}")
 
     Xtr_txt = [item_text(r) for r in train.itertuples()]
@@ -88,11 +92,23 @@ def main() -> None:
            if args.fast else LinearSVC(C=0.5, max_iter=3000, random_state=17))
     print(f"fitting {type(clf).__name__} over {len(set(ytr))} classes…", flush=True)
     clf.fit(Xtr, ytr)
-    out.append(report(f"tfidf + {type(clf).__name__}", clf.predict(Xev), ev))
+    yp = clf.predict(Xev)
+    out.append(report(f"tfidf + {type(clf).__name__}", yp, ev))
+
+    # Per-item predictions, so this baseline can be compared to the cascade with a paired
+    # test rather than by eyeballing two aggregate tables. An aggregate row cannot tell
+    # you whether a 0.034 gap is real.
+    tag = args.split.replace("+", "_")
+    preds = args.data / f"baseline_preds_{tag}.csv"
+    pd.DataFrame({"item_id": ev.item_id.to_numpy(), "stratum": ev.stratum.to_numpy(),
+                  "gold": ev.product_type.to_numpy(), "pred": yp}).to_csv(preds, index=False)
+    print(f"Wrote {preds}")
 
     res = pd.concat(out).reset_index()
-    res.to_csv(args.data / "baselines.csv", index=False)
-    print(f"\nWrote {args.data / 'baselines.csv'}")
+    res.insert(0, "split", args.split)
+    path = args.data / f"baselines_{args.split.replace('+', '_')}.csv"
+    res.to_csv(path, index=False)
+    print(f"\nWrote {path}")
     print("\nCompare against stage1.py's accepted accuracy and recall.py's macro@1.")
     print("A linear model that matches the cascade on head is not a failure — it is the")
     print("finding that the cascade's value is concentrated in the tail. Say it first.")

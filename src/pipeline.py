@@ -261,8 +261,10 @@ def main() -> None:
     ap.add_argument("--evaluate", action="store_true")
     ap.add_argument("--split", default="test")
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--with-llm", action="store_true",
-                    help="fold in data/stage3_results.csv for the items it covered")
+    ap.add_argument("--with-llm", nargs="?", const="stage3_fused.csv", default=None,
+                    metavar="CSV",
+                    help="fold in a Stage 3 results file for the items it covered "
+                         "(default stage3_fused.csv). Name another to score an ablation.")
     ap.add_argument("--shortlist-mode", choices=list(MODES), default=None)
     ap.add_argument("--retriever-variant", default=None,
                     choices=["v1_name", "v2_path", "v3_proto", "v4_desc"])
@@ -293,11 +295,19 @@ def main() -> None:
 
     s3 = None
     if args.with_llm:
-        p = args.data / "stage3_results.csv"
+        p = args.data / args.with_llm
         if not p.exists():
-            raise SystemExit(f"{p} not found — run stage3_agent.py first.")
+            avail = sorted(x.name for x in args.data.glob("stage3_*.csv"))
+            raise SystemExit(f"{p} not found — run stage3_agent.py first."
+                             + (f" Available: {', '.join(avail)}" if avail else ""))
         s3 = pd.read_csv(p)
-        print(f"Folding in {len(s3):,} Stage 3 decisions (only items it actually covered)")
+        mode = s3.shortlist_mode.iloc[0] if "shortlist_mode" in s3 else "unknown"
+        if mode != cfg.shortlist_mode:
+            print(f"WARNING: {p.name} was produced against a '{mode}' shortlist but this "
+                  f"cascade builds '{cfg.shortlist_mode}'. The agent was scored on a list "
+                  "this pipeline would never hand it.")
+        print(f"Folding in {len(s3):,} Stage 3 decisions from {p.name} "
+              f"(only items it actually covered)")
     evaluate(cascade, df, s3)
 
 

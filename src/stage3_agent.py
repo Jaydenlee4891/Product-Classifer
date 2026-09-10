@@ -278,13 +278,18 @@ def main() -> None:
     shortlists = build_shortlist(cands, scores, args.shortlist, args.shortlist_mode)
     print(f"Shortlist: {args.shortlist} candidates, '{args.shortlist_mode}' ordering")
 
+    # ABO ships 716 duplicate item_ids (56 of them filed under two different leaves), so
+    # the ASIN alone is not a key — the Batch API rejects a whole batch for one collision.
+    # Prefix with the row position: unique by construction, still readable in the results.
+    key = lambda i: f"{i}-{ev.item_id.iloc[i]}"
+
     reqs = []
     for i in idx:
         item = render_item(ev.iloc[i])
         cand = render_candidates(shortlists[i], docs, leaves, rng,
                                  shuffle=args.ablate != "rank-order")
         reqs.append({
-            "custom_id": str(ev.item_id.iloc[i]),
+            "custom_id": key(i),
             "params": {
                 "model": MODEL, "max_tokens": 200, "system": sys_prompt,
                 "messages": build_messages(item, cand, fewshot=args.ablate != "no-fewshot"),
@@ -292,6 +297,13 @@ def main() -> None:
                 "tool_choice": {"type": "tool", "name": "record_category"},
             },
         })
+
+    # Check it here rather than discovering it in a 400 after building every request.
+    ids = [r["custom_id"] for r in reqs]
+    if len(set(ids)) != len(ids):
+        dup = pd.Series(ids).value_counts()
+        raise SystemExit(f"custom_id collision: {(dup > 1).sum()} duplicated "
+                         f"(e.g. {list(dup[dup > 1].index[:5])}). The batch would be rejected.")
 
     if args.dry_run or not reqs:
         print("\n--- example prompt ---\n" + sys_prompt + "\n")
@@ -309,7 +321,7 @@ def main() -> None:
     rows = []
     for i in idx:
         iid = str(ev.item_id.iloc[i])
-        r = res.get(iid) or {}
+        r = res.get(key(i)) or {}
         rows.append({
             "item_id": iid, "stratum": ev.stratum.iloc[i], "gold": gold[i],
             "pred": r.get("leaf_id"), "confidence": r.get("confidence"),
@@ -321,8 +333,12 @@ def main() -> None:
             # without it being visible in the file.
             "shortlist_mode": args.shortlist_mode, "tau": args.tau,
         })
+    # Tagged by what produced it. A fixed filename means every ablation destroys the
+    # run it is meant to be compared against — and these runs cost money.
+    tag = args.shortlist_mode + ("" if args.ablate == "none" else f"_{args.ablate}")
+    results_path = args.data / f"stage3_{tag}.csv"
     out = pd.DataFrame(rows)
-    out.to_csv(args.data / "stage3_results.csv", index=False)
+    out.to_csv(results_path, index=False)
 
     out["correct"] = out.pred == out.gold
     out["s2_correct"] = out.s2_top1 == out.gold
@@ -345,7 +361,7 @@ def main() -> None:
               f"{miss.abstained.mean():.1%} of them.")
         print("That rate is the honest measure of the abstention prompt: those items are")
         print("unanswerable from the shortlist, so anything but an abstention is a wrong label.")
-    print(f"\nWrote {args.data / 'stage3_results.csv'}")
+    print(f"\nWrote {results_path}")
     print("Failures parsed as None:", int(out.pred.isna().sum()))
 
 
