@@ -225,6 +225,52 @@ learning: TF-IDF still reaches 0.696 macro on leaves with 10–99 examples, wher
 system this evidence argues for is a cheap supervised tier over all 440 trainable leaves,
 with retrieval and the agent reserved for the 90 leaves that genuinely have no training data.
 
+### Conformal prediction sets — calibrated exactly, and useless where it matters
+
+`stage2_conformal.py` replaces the hand-tuned threshold with a distribution-free guarantee.
+Nonconformity `s(x,y) = 1 - p(y|x)` over the 50 candidates, threshold at the
+`⌈(n+1)(1-α)⌉/n` empirical quantile of the **validation** scores, prediction set
+`C(x) = { y : p(y|x) ≥ 1-q }`. Routing: `|C|=1` accept, `|C|>1` escalate with exactly those
+candidates, `|C|=0` escalate the full top-50 as out-of-distribution.
+
+The calibration is essentially exact — conditional coverage against nominal:
+
+```
+  α = 0.10   0.894 / 0.900     α = 0.05   0.943 / 0.950     α = 0.01   0.987 / 0.990
+```
+
+All within 0.007. Now look at where that average comes from (α = 0.10):
+
+```
+   stratum  cov_given_retr  median_set  accept_rate
+      head           0.923        1.00        0.852
+     torso           0.907        1.00        0.633
+      tail           0.860        1.00        0.571
+  few_shot           0.652        1.00        0.529
+ zero_shot           0.017        2.00        0.287
+       ALL           0.894        1.00        0.779
+```
+
+**Marginal coverage 0.894; zero-shot coverage 0.017.** The guarantee is honoured exactly as
+advertised and is worthless on the stratum the architecture exists for. At α = 0.01
+zero-shot reaches only 0.477, with a median set of **27.5 of 50 candidates** — not a
+prediction set, a shrug.
+
+This is the textbook gap between *marginal* and *conditional* coverage, on real data, and it
+is finding 1 arriving from a fourth direction: the nonconformity scores come from the
+fine-tuned reranker, so the calibrated threshold inherits its blindness to rare leaves.
+
+`--mondrian predicted` groups the threshold by the **predicted** leaf's stratum — predicted,
+because conditioning on the true stratum would require knowing the answer being sought. It
+helps a little (zero-shot 0.017 → 0.105 at α = 0.10) and the script says honestly why it
+cannot help more: only **3 calibration points** fall in the zero-shot group, against the ≥9
+needed for the guarantee to bind.
+
+Two further notes the script reports rather than hides: the guarantee is **conditional on
+retrieval** — an item whose gold leaf was never in the top-50 cannot be covered at any α, so
+end-to-end coverage is `P(retrieved) × P(covered | retrieved) = 0.971 × 0.894 = 0.869`. And
+escalation at α = 0.10 is 22.1% of items, against the 5% the original design assumed.
+
 ### Stage 3, paired against its own shortlist's top candidate
 
 McNemar exact, two-sided, on all 2,015 escalated items:
@@ -248,12 +294,14 @@ The shortlist contains the gold leaf 90.6% of the time. On head the agent is sig
 
 ### 1. Anything trained on the observed label distribution suppresses the unobserved tail
 
-Three independent demonstrations in one system:
+Four independent demonstrations in one system:
 
 - `OTHER` catches 79% of tail and 73% of few-shot items but only **31%** of zero-shot.
 - The fine-tuned reranker drops zero-shot to macro recall@10 = **0.124**.
 - `sqrt` class weighting improved head/torso deferral and made tail deferral **worse**
   (0.796 → 0.696).
+- Conformal prediction calibrates to within 0.007 of nominal and still delivers **0.017**
+  coverage on zero-shot, because its nonconformity scores come from the reranker.
 
 The mechanism for `OTHER` is exact: it was trained on **6,397 rows — 5,793 tail, 604
 few-shot, 0 zero-shot.** It is a learned class whose training set *is* the tail. It
@@ -340,7 +388,7 @@ src/recall.py            retrieval gate — recall@k per variant per stratum
 src/baselines.py         majority + TF-IDF/SGD or LinearSVC floor
 src/stage1.py            S1 training, deferral table, funnel; --from-probs re-reports free
 src/stage2_rerank.py     negative mining, listwise training, recall@m gate
-src/stage2_conformal.py  split conformal prediction sets      ← never executed
+src/stage2_conformal.py  split conformal prediction sets + set-size routing
 src/stage3_agent.py      Batch API agent tier, ablations, --dry-run
 src/shortlist.py         the one shortlist implementation, shared by both callers
 src/pipeline.py          Cascade object + end-to-end evaluation with stage attribution
@@ -390,6 +438,7 @@ python src/recall.py        --data data                        # the retrieval g
 python src/baselines.py     --data data --split test           # the floor
 python src/stage1.py        --data data --head-cut 69          # ~40 min on GPU
 python src/stage2_rerank.py --data data                        # train + score
+python src/stage2_conformal.py --data data --tag ft2           # prediction sets, seconds
 python src/test_pipeline.py
 ```
 
@@ -423,8 +472,8 @@ the full 610,000-pair test pass takes about two hours.
 ## Known limitations
 
 - **Batch scoring only.** No serving path, no latency budget, no monitoring.
-- **`stage2_conformal.py` has never been executed.** Split conformal prediction sets are
-  implemented and unmeasured.
+- **Conformal routing is measured but not wired in.** The prediction sets are computed and
+  reported; the shipped cascade still routes on τ and a fixed shortlist of 10.
 - **Abstention targeting is weak**: 7.6% rate, 25.3% recall, 31.4% precision, and 105
   answerable items refused — 5.2% of the escalated run discarded for nothing. The largest
   single pool of recoverable error in the system.
