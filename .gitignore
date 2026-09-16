@@ -14,6 +14,8 @@ __pycache__/
 .env
 .env.*
 *.key
+# ...but the template carries no secrets and is the documentation for the rest
+!.env.example
 
 # scratch and unrelated projects that live in this folder
 Claude outputs/

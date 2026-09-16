@@ -52,7 +52,8 @@ import pandas as pd
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from recall import INSTRUCTION, assert_finite, item_text, load_model, pick_device
+from recall import (INSTRUCTION, assert_finite, item_text, load_model,
+                    pick_device, save_array)
 from shortlist import MODES, build_shortlist
 
 STRATA = ["head", "torso", "tail", "few_shot", "zero_shot"]
@@ -122,7 +123,8 @@ class Cascade:
             self.label_emb = np.load(cache)
         else:
             self.label_emb = self._encode_labels(retr_docs)
-            np.save(cache, self.label_emb)
+            save_array(cache, self.label_emb, model=self.retriever,
+                       device=self.device, variant=cfg.retriever_variant)
         assert_finite(self.label_emb, "label embeddings")
 
     def _encode_labels(self, docs: list[str]) -> np.ndarray:

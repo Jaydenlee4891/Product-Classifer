@@ -31,7 +31,8 @@ from sentence_transformers import SentenceTransformer
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
-from recall import MODEL as BI_MODEL, assert_finite, embed_items, load_model, pick_device
+from recall import (MODEL as BI_MODEL, assert_finite, embed_items, load_model,
+                    pick_device, save_array)
 
 SEED = 17
 
@@ -238,6 +239,9 @@ def main() -> None:
         tok.save_pretrained(ckpt)
         (ckpt / "run_config.json").write_text(
             json.dumps({**{k: str(v) for k, v in vars(args).items()},
+                        # args.device is what was REQUESTED ("auto"); these two are what
+                        # it resolved to, which is the part that reproduces a number.
+                        "resolved_device": device, "fp16_autocast": use_fp16,
                         "n_train_groups": len(capped)}, indent=2))
         print(f"Saved checkpoint -> {ckpt}")
 
@@ -246,8 +250,10 @@ def main() -> None:
         print(f"Scoring {name}: {len(part):,} items x {args.k} candidates")
         s = score(model, tok, texts, docs, cands[name], args.max_len,
                   args.score_batch, device, use_fp16)
-        np.save(out / f"scores_{name}_{tag}.npy", s)
-        np.save(out / f"cands_{name}.npy", cands[name])
+        save_array(out / f"scores_{name}_{tag}.npy", s, model=model,
+                   device=device, fp16_autocast=use_fp16)
+        save_array(out / f"cands_{name}.npy", cands[name], device=device,
+                   note="candidate ids from the BI-ENCODER, not this model")
     (out / "leaves.json").write_text(json.dumps(leaves))
 
     # --- THE GATE ---------------------------------------------------------------

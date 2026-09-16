@@ -393,6 +393,16 @@ src/stage3_agent.py      Batch API agent tier, ablations, --dry-run
 src/shortlist.py         the one shortlist implementation, shared by both callers
 src/pipeline.py          Cascade object + end-to-end evaluation with stage attribution
 src/test_pipeline.py     21 assertions, no model required
+src/sweep.py             tau frontier replayed from cached Stage 3 answers — costs nothing
+src/provenance.py        which device and precision produced each array in data/
+src/serve/graph.py       the cascade as a LangGraph state graph over the same Cascade object
+src/serve/llm.py         Stage 3 as a swappable node: anthropic | raw | cached | ollama | none
+src/serve/app.py         FastAPI endpoint, weights loaded once at startup
+src/serve/verify.py      served path vs the offline arrays
+src/serve/bench.py       per-tier latency, cold start excluded and reported separately
+src/serve/diagnose_embedding.py   padding, batch-invariance and cache provenance probes
+src/serve/test_graph.py  20 routing assertions, no weights required
+src/serve/test_app.py    18 endpoint assertions, no weights required
 ```
 
 `shortlist.py` exists because the shortlist was implemented twice and the two drifted — a
@@ -469,9 +479,138 @@ the full 610,000-pair test pass takes about two hours.
 
 ---
 
+## Serving
+
+`src/serve/` runs the cascade as a routed graph behind an HTTP endpoint. Nothing that
+produces a number is reimplemented: every node calls the same `Cascade` methods the
+offline evaluation calls, and the retrieval node is copied from `Cascade.predict`. The
+layer contributes routing, per-tier timing, and one rule — an abstention ends with **no
+label**, never a silent fallback to S2's top-1, matching `pipeline.evaluate`.
+
+```
+uvicorn serve.app:app --app-dir src --port 8000      # / redirects to /docs
+python src/serve/verify.py --data data --n 400 --deferred-only
+python src/serve/bench.py  --data data --n 300
+```
+
+Stage 3 is a swappable node. `cached` replays `stage3_fused.csv` and spends nothing;
+`anthropic` calls live through LangChain; `raw` sends the batch script's exact message
+list through the SDK as a control,
+since LangChain and the raw API encode tool results differently and that difference is
+checked rather than assumed (`python src/serve/llm.py --parity --n 40`).
+
+**Parity, measured.** Routing is exact — 0 defer decision flips in 400 items, S1 p_max
+agreeing to 2.44e-06 — so the stage-attribution table above describes the endpoint.
+Retrieval shortlists differ: the cached embeddings were computed on a different machine
+than `probs_*.npy` and `scores_*.npy`, a ~4e-4 per-vector gap that reorders a 530-way
+top-50. Net cost is 2.5 points of gold-leaf reachability, bounding end-to-end micro impact
+at **≤1.0%** (95% Wilson). Full derivation, including three hypotheses that were wrong and
+two numbers that were measurement artefacts, in [docs/serving-parity.md](docs/serving-parity.md).
+
+**Prompt caching: where the marker goes decides whether it works at all.** Measured with
+the free `count_tokens` endpoint on Claude Sonnet 4.5, whose minimum cacheable prefix is
+1,024 tokens:
+
+| prefix | tokens | |
+|---|---:|---|
+| tools + system | 882 | below the minimum — **silently uncached** |
+| + worked examples | 1,282 | caches |
+| full request (mean of 20) | 1,682 | |
+
+The marker began on the system block, 142 tokens short of the line. Below the minimum the
+API does not cache and does not say so — no error, and both cache counters return 0 — so
+that is an optimisation which can be believed indefinitely without ever having run. Moving
+it to the last worked example clears the threshold and covers 76% of a mean request.
+
+Verified against live responses, not asserted: `--parity` prints the cache tokens the API
+reported. A cold call writes 1,344; every warm call reads 1,344. Billing reads at 0.1× and
+5-minute writes at 1.25×, that is **68% off input** in warm steady state — $5.54 → $2.06
+batch for the 2,015 escalated items. Quote the warm figure only for the sequential served
+path: the entry is 5-minute ephemeral and the Batch API guarantees no ordering, so hit
+rates there are not assured.
+
+Estimating this from character counts is how it went wrong twice. An English prose ratio
+put the request at ~930 tokens; it is 1,682, because the candidate block is
+`ALL_CAPS_UNDERSCORE` leaf ids and taxonomy paths. Every cost figure derived from
+characters was low by 1.8×, and the conclusion drawn from it — that this prompt was too
+small to cache — was the opposite of the truth.
+
+**Latency is per tier, because an average over tiers describes no request.**
+300 test items on an M-series Air (MPS, fp32), `provider=cached`:
+
+| node | n | p50 | p95 | mean |
+|---|---:|---:|---:|---:|
+| s1 | 300 | 12.9 | 54.5 | 19.9 |
+| retrieve | 63 | 129.8 | 201.1 | 130.0 |
+| rerank | 63 | 148.1 | 215.6 | 158.0 |
+| stage3 | 63 | 0.0 | 0.0 | 0.0 |
+
+| answered by | share | p50 | p95 | mean |
+|---|---:|---:|---:|---:|
+| S1 | 79.0% | 12.8 | 50.7 | 18.7 |
+| S3 | 19.3% | 316.2 | 394.8 | 311.7 |
+| S3-abstain | 1.7% | 300.4 | 395.5 | 322.1 |
+| **ALL** | 100% | **13.8** | **348.8** | **80.4** |
+
+All ms. The ALL row is the argument for the table above it: a median of 13.8 and a mean
+of 80.4 over the same requests, because 79% of them are one DistilBERT forward and the
+rest are 25x that. Nothing is served at 80ms. τ sets the mix, so τ sets the distribution,
+and the 0.914 → 0.895 micro / 0.543 → 0.647 macro trade in `sweep.py` is also a
+13ms → 316ms trade.
+
+The `stage3` row is 0.0 because `cached` reads a CSV; a live synchronous call adds
+seconds, not milliseconds, and it lands entirely on the 21% of requests that escalate.
+Retrieval plus reranking is 278ms of the 316ms escalated path — the LLM tier is not what
+makes deferral expensive in wall time, the 0.6B bi-encoder and fifty cross-encoder pairs
+are.
+
+Cold start is excluded and reported on its own line: the retriever is lazy, so the first
+deferred request pays for loading it. The 21.0% escalation rate against the corpus-wide
+16.5% is a +2.1σ sampling draw, not drift — the offline arrays defer the identical 63 of
+those 300 items.
+
+**Keys and tracing.** `.env.example` documents every variable. Two are worth knowing
+before the first live call: an organisation-level API key is not tied to a workspace and
+is rejected with a 400 unless `ANTHROPIC_WORKSPACE_ID` is set, and responses are requested
+as gzip because some installed httpx2/zstd combinations fail while *decompressing* a reply
+and the SDK re-raises that as `APIConnectionError` — which reads as a network fault
+although the request already succeeded and was billed.
+
+LangSmith tracing works with no code change (`LANGSMITH_TRACING=true` plus a key; a
+non-US account also needs `LANGSMITH_ENDPOINT`). It traces the LangChain path only —
+provider `raw` calls the SDK directly and never appears, so the parity check is the one
+thing the dashboard cannot show. The cache and token counts quoted above come from the
+API response body, which `--parity` prints; LangSmith renders the same fields with a UI
+and history on top. Useful, not more authoritative.
+
+**The τ frontier is free.** Deferral is `argmax == OTHER OR p_max < τ`, so any τ below the
+0.900 operating point escalates a strict subset of the 2,015 items already answered on
+disk. `sweep.py` replays the whole curve without an API call. It shows micro falling
+0.914 → 0.895 and macro rising 0.543 → 0.647 as τ climbs, with zero-shot macro nearly
+doubling — the cascade's thesis priced per item. There is no knee below 0.900: macro is
+still climbing at the operating point, and finding where it peaks means escalating more,
+which is the one direction that costs money.
+
+---
+
 ## Known limitations
 
-- **Batch scoring only.** No serving path, no latency budget, no monitoring.
+- **Serving parity is bounded, not clean.** The endpoint reproduces routing exactly but
+  not retrieval shortlists, at a measured ≤1.0% of micro. The cause is cross-device
+  artefact provenance, not the serving layer — see above.
+- **`data/` was built on two machines.** Every `emb_*.npy` was produced on CUDA in fp16;
+  `probs_*.npy` and `scores_*.npy` in fp32 on MPS. Neither `run_config.json` recorded it —
+  both stored `"device": "auto"`, the flag passed rather than the device it resolved to —
+  so it had to be recovered from bit patterns. Arrays written from now on carry a
+  `.meta.json` sidecar; `src/provenance.py` audits the lot. The principled fix is to
+  regenerate every embedding on one machine, which invalidates the candidate pools, the
+  reranker scores and the Stage 3 answers, and has not been done.
+- **`compose` aligns slices by `item_id`.** ABO duplicates 716 of them, 56 under two
+  different leaves, so the dict collapses 27 of 12,200 test rows onto the wrong row.
+  `serve/verify.py` aligns by row position instead; `stage3_agent.py` and `sweep.py` still
+  do not.
+- **No latency budget and no monitoring.** The endpoint reports per-tier timings per
+  request; nothing aggregates or alerts on them.
 - **Conformal routing is measured but not wired in.** The prediction sets are computed and
   reported; the shipped cascade still routes on τ and a fixed shortlist of 10.
 - **Abstention targeting is weak**: 7.6% rate, 25.3% recall, 31.4% precision, and 105

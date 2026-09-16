@@ -46,6 +46,53 @@ def load_model(device: str) -> SentenceTransformer:
     return SentenceTransformer(MODEL, device=device, model_kwargs=kwargs)
 
 
+def array_meta(model=None, device: str | None = None) -> dict:
+    """Provenance for a saved .npy: which machine and which precision produced it.
+
+    This exists because it was once missing. The cached embeddings in data/ carry an
+    fp16 fingerprint in every value while probs_*.npy and scores_*.npy are fp32 -- the
+    embeddings were produced on a CUDA card and the rest on an Apple GPU, and nothing on
+    disk said so. Both run_config.json files recorded "device": "auto", the flag that was
+    passed, not the device it resolved to. Reconstructing that took a bit-pattern test.
+
+    A ~4e-4 per-vector difference between machines is enough to reshuffle a top-10
+    shortlist out of 530 labels, so "which device wrote this array" is not bookkeeping.
+    """
+    import platform
+    meta = {
+        "device": device,
+        "dtype": None,
+        "torch": torch.__version__,
+        "platform": f"{platform.system()} {platform.machine()}",
+        "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "written": pd.Timestamp.utcnow().isoformat(),
+    }
+    if model is not None:
+        try:
+            meta["device"] = device or str(next(model.parameters()).device)
+            meta["dtype"] = str(next(model.parameters()).dtype)
+        except (StopIteration, AttributeError):
+            pass
+    try:
+        import sentence_transformers, transformers
+        meta["sentence_transformers"] = sentence_transformers.__version__
+        meta["transformers"] = transformers.__version__
+    except ImportError:
+        pass
+    return meta
+
+
+def save_array(path: Path, arr: np.ndarray, model=None, device: str | None = None,
+               **extra) -> None:
+    """np.save plus a sidecar <name>.meta.json recording what produced it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(path, arr)
+    meta = {**array_meta(model, device), "shape": list(arr.shape),
+            "stored_dtype": str(arr.dtype), **extra}
+    path.with_suffix(".meta.json").write_text(json.dumps(meta, indent=2))
+
+
 def assert_finite(a: np.ndarray, what: str) -> None:
     """NaN embeddings do not crash anything — they rank as misses and quietly deflate
     every score. Check rather than trust.
@@ -90,7 +137,7 @@ def embed_items(model, df: pd.DataFrame, cache: Path, batch_size: int) -> np.nda
         show_progress_bar=True,
     ).astype(np.float32)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    np.save(cache, emb)
+    save_array(cache, emb, model=model)
     return emb
 
 

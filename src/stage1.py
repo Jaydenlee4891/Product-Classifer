@@ -28,7 +28,8 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
-from recall import item_text  # same text the retriever saw; they must not diverge
+from recall import item_text, save_array  # same text the retriever saw; they
+                                          # must not diverge
 
 OTHER = "__OTHER__"
 STRATA = ["head", "torso", "tail", "few_shot", "zero_shot"]
@@ -289,7 +290,8 @@ def main() -> None:
         train_model(model, tr_loader, device, args.epochs, args.lr, use_fp16, w)
 
         probs = predict(model, ev_loader, device, use_fp16)
-        np.save(out / f"probs_{tag}.npy", probs)
+        save_array(out / f"probs_{tag}.npy", probs, model=model,
+                   device=device, fp16_autocast=use_fp16)
         (out / f"classes_{tag}.json").write_text(json.dumps(classes))
 
         # Persist the checkpoint. Predictions are not a model: without this you cannot
@@ -300,6 +302,9 @@ def main() -> None:
         tok.save_pretrained(ckpt)
         (ckpt / "run_config.json").write_text(
             json.dumps({**{k: str(v) for k, v in vars(args).items()},
+                        # args.device is what was REQUESTED ("auto"); these two are what
+                        # it resolved to, which is the part that reproduces a number.
+                        "resolved_device": device, "fp16_autocast": use_fp16,
                         "n_classes": len(classes), "n_train": len(train)}, indent=2))
         print(f"Saved checkpoint -> {ckpt}")
 

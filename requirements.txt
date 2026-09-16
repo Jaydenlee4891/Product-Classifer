@@ -13,3 +13,14 @@ tqdm>=4.66.0
 # only needed for `label_docs.py --describe`
 anthropic>=0.40.0
 scikit-learn>=1.3.0
+
+# --- serving layer (src/serve) ---
+# LangChain/LangGraph 1.x. create_agent and the 0.x LCEL chain APIs are a different
+# surface; pin the major so a tutorial-era example cannot be pasted in silently.
+langgraph>=1.0,<2
+langchain-core>=1.0,<2
+langchain-anthropic>=1.0,<2      # provider 'anthropic'
+fastapi>=0.115
+uvicorn[standard]>=0.30
+# provider 'ollama', local arm only — not needed for the cached or Anthropic paths
+# langchain-ollama>=1.0,<2
