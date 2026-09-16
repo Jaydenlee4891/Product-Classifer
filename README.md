@@ -558,16 +558,40 @@ rest are 25x that. Nothing is served at 80ms. τ sets the mix, so τ sets the di
 and the 0.914 → 0.895 micro / 0.543 → 0.647 macro trade in `sweep.py` is also a
 13ms → 316ms trade.
 
-The `stage3` row is 0.0 because `cached` reads a CSV; a live synchronous call adds
-seconds, not milliseconds, and it lands entirely on the 21% of requests that escalate.
-Retrieval plus reranking is 278ms of the 316ms escalated path — the LLM tier is not what
-makes deferral expensive in wall time, the 0.6B bi-encoder and fifty cross-encoder pairs
-are.
+The `stage3` row is 0.0 because `cached` reads a CSV. With `--provider anthropic`, 200
+requests, 36 of them escalating:
 
-Cold start is excluded and reported on its own line: the retriever is lazy, so the first
-deferred request pays for loading it. The 21.0% escalation rate against the corpus-wide
-16.5% is a +2.1σ sampling draw, not drift — the offline arrays defer the identical 63 of
-those 300 items.
+| node | n | p50 | p95 | mean |
+|---|---:|---:|---:|---:|
+| s1 | 200 | 21.2 | 79.0 | 28.3 |
+| retrieve | 36 | 135.3 | 181.6 | 125.8 |
+| rerank | 36 | 183.3 | 242.9 | 192.6 |
+| stage3 | 36 | 1778.5 | 2125.8 | 1797.2 |
+
+| answered by | share | p50 | p95 | mean |
+|---|---:|---:|---:|---:|
+| S1 | 82.0% | 18.8 | 78.8 | 27.6 |
+| S3 | 17.0% | 2128.1 | 2410.3 | 2149.5 |
+| S3-abstain | 1.0% | 2106.5 | 2165.1 | 2106.5 |
+| **ALL** | 100% | **25.0** | **2181.8** | **409.1** |
+
+**Which tier dominates wall time depends entirely on whether Stage 3 is real.** Cached,
+retrieval and reranking are 288ms of a 316ms escalated path — 91% of it. Live, Stage 3
+alone is 1,797ms of 2,149ms — 84% — and retrieval plus reranking fall to 15%. Both
+measurements are correct and they answer different questions, which is the argument for
+labelling the provider next to any latency claim rather than reporting "the escalated
+path" as though it were one number.
+
+End to end the served mix is a p50 of 25.0ms against a p95 of 2,181.8ms: an 87x spread on
+a mean of 409ms that describes no request that was actually made. τ decides where in that
+range each item lands, so the 0.543 → 0.647 macro purchase in `sweep.py` is also a
+25ms → 2,128ms purchase.
+
+Cold start is excluded and reported separately: the retriever is lazy, so the first
+deferred request after a restart pays **10.8s** to load Qwen3-Embedding-0.6B, against 3.8s
+for S1 and the cross-encoder at startup. 82% of requests never touch it, which is why it
+is lazy, and why that 10.8s is a property to document rather than a number to bury in a
+tail.
 
 **Keys and tracing.** `.env.example` documents every variable. Two are worth knowing
 before the first live call: an organisation-level API key is not tied to a workspace and
