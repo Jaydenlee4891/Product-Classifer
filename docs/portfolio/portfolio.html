@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Long-Tail Cascade Classifier</title>
+<style>
+@page { size: A4; margin: 15mm 16mm 14mm; }
+:root{
+  --ink:#141412; --ink2:#4a4945; --muted:#82817c; --rule:#e4e3df;
+  --accent:#2a78d6; --warm:#eb6834; --surface:#f8f8f6;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Bitstream Charter","Charter",Georgia,serif;
+     font-size:9.6pt;line-height:1.5;color:var(--ink);}
+h1,h2,h3,.sans,table,figcaption,.k,.tag{font-family:"Carlito","Calibri",Arial,sans-serif}
+h1{font-size:23pt;line-height:1.1;margin:0 0 2mm;letter-spacing:-.02em;font-weight:700}
+h2{font-size:12.5pt;margin:8mm 0 2.5mm;letter-spacing:-.01em;font-weight:700;
+   padding-bottom:1.4mm;border-bottom:1.6px solid var(--ink)}
+h3{font-size:10pt;margin:5mm 0 1.5mm;font-weight:700;color:var(--ink)}
+p{margin:0 0 2.6mm}
+a{color:var(--accent);text-decoration:none}
+.lede{font-size:11pt;line-height:1.45;color:var(--ink2);margin-bottom:4mm}
+.sub{color:var(--muted);font-size:8.6pt;letter-spacing:.06em;text-transform:uppercase}
+.byline{display:flex;justify-content:space-between;align-items:baseline;
+        border-top:2.4px solid var(--ink);padding-top:2mm;margin-bottom:6mm}
+.hero{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--rule);
+      border-radius:3px;overflow:hidden;margin:4mm 0 5mm;background:var(--surface)}
+.hero div{padding:3mm 3.2mm;border-right:1px solid var(--rule)}
+.hero div:last-child{border-right:0}
+.hero .n{font-family:"Carlito",Arial,sans-serif;font-size:17pt;font-weight:700;
+         line-height:1;letter-spacing:-.02em}
+.hero .l{font-size:7.6pt;color:var(--muted);margin-top:1.4mm;line-height:1.3;
+         font-family:"Carlito",Arial,sans-serif}
+table{border-collapse:collapse;width:100%;font-size:8.4pt;margin:2mm 0 3mm}
+th{text-align:left;font-weight:700;color:var(--ink2);border-bottom:1.2px solid var(--ink);
+   padding:1.4mm 2mm 1.4mm 0;font-size:7.8pt;letter-spacing:.03em;text-transform:uppercase}
+td{padding:1.4mm 2mm 1.4mm 0;border-bottom:.8px solid var(--rule);vertical-align:top}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;padding:1.4mm 0 1.4mm 6mm;white-space:nowrap}
+tr.hi td{font-weight:700}
+.k{font-size:8.6pt;color:var(--ink2)}
+code{font-family:"DejaVu Sans Mono",monospace;font-size:8pt;background:var(--surface);
+     padding:.3mm 1mm;border-radius:2px}
+figure{margin:3mm 0 4mm;break-inside:avoid}
+figure svg{width:100%;height:auto;display:block}
+figcaption{font-size:7.9pt;color:var(--muted);margin-top:1.5mm;line-height:1.35}
+.cols{column-count:2;column-gap:7mm}
+.cols p{break-inside:avoid}
+.note{background:var(--surface);border-left:2.5px solid var(--accent);
+      padding:2.5mm 3mm;margin:3mm 0;font-size:9pt;break-inside:avoid}
+.note.warm{border-left-color:var(--warm)}
+.note b{font-family:"Carlito",Arial,sans-serif}
+ul{margin:0 0 2.6mm;padding-left:4.5mm}
+li{margin-bottom:1.4mm}
+.pb{break-before:page}
+footer{margin-top:7mm;padding-top:2mm;border-top:1px solid var(--rule);
+       font-size:7.8pt;color:var(--muted);font-family:"Carlito",Arial,sans-serif}
+.tag{display:inline-block;font-size:7.4pt;padding:.6mm 2mm;border:1px solid var(--rule);
+     border-radius:99px;color:var(--ink2);margin:0 1.2mm 1.4mm 0;background:#fff}
+</style></head><body>
+
+<div class="byline">
+  <span class="sub">Portfolio &middot; ML systems</span>
+  <span class="sub">Jayden Lee (이우석) &middot; Yonsei Applied Statistics</span>
+</div>
+
+<h1>Long-Tail Cascade Classifier</h1>
+<p class="lede">A four-tier classifier for taxonomies where most labels are rare and some have
+no training data at all. Each tier answers what it can and defers the rest, so cost and
+capability rise only for the items that need them.</p>
+
+<div class="hero">
+  <div><div class="n">0.647</div><div class="l">macro accuracy<br>530 leaves</div></div>
+  <div><div class="n">+0.140</div><div class="l">macro over a<br>TF-IDF + SVM floor</div></div>
+  <div><div class="n">12,200</div><div class="l">held-out items<br>evaluated</div></div>
+  <div><div class="n">16.5%</div><div class="l">of items reach<br>the LLM tier</div></div>
+</div>
+
+<p><b>The claim is not that this is a state-of-the-art classifier.</b> It is that every tier
+has a measured failure attached, and the architecture wins anyway because those failures do
+not overlap. A TF-IDF + LinearSVC baseline on the same 12,200 items scores micro 0.919 /
+macro 0.507. The cascade scores <b>0.895 / 0.647</b> — it wins macro by 0.140 and loses micro
+by 0.024. Where that trade comes from is the whole project.</p>
+
+<h2>The problem</h2>
+<div class="cols">
+<p>Real taxonomies are Zipfian. In Amazon Berkeley Objects, one leaf is 44% of the corpus and
+231 leaves have fewer than ten items. Two consequences shape everything.</p>
+<p><b>Accuracy is meaningless.</b> Predicting <code>CELLULAR_PHONE_CASE</code> for everything
+scores 53% micro. Every number here is reported micro (per item) and macro (per leaf), and
+macro is the one to read.</p>
+<p><b>A softmax classifier cannot represent a label it never saw.</b> Not "does badly on" —
+cannot represent. A flat classifier's score on a genuinely unseen leaf is 0.000 by
+construction, and no amount of training data for other classes changes it.</p>
+<p>The cascade exists for the second point. 90 of the 530 leaves have no training rows at
+all. Everything else is engineering around that fact.</p>
+</div>
+
+<h2>Architecture</h2>
+{{ARCH}}
+
+<table>
+<tr><th>Tier</th><th>Model</th><th>Role</th><th class="n">Share</th><th class="n">Accuracy</th></tr>
+<tr><td>S1</td><td>DistilBERT, 69 head classes + <code>OTHER</code></td><td>answer the head, defer the rest</td><td class="n">83.5%</td><td class="n">0.977</td></tr>
+<tr><td>S2</td><td>frozen Qwen3-Embedding-0.6B + fine-tuned MiniLM cross-encoder</td><td>retrieve and rank 10 candidates from 530 <span class="k">(macro recall@10)</span></td><td class="n">—</td><td class="n">0.931</td></tr>
+<tr><td>S3</td><td>Claude Sonnet 4.5, forced tool call</td><td>choose from the shortlist, or abstain</td><td class="n">16.5%</td><td class="n">—</td></tr>
+</table>
+
+<p>S1 defers when <code>argmax == OTHER</code> <b>or</b> <code>p_max &lt; 0.900</code>. The
+threshold was fitted on a validation split at a 98% precision target, never on test. Retrieval
+is the ceiling on everything below it: if the correct leaf is not in the top-50, no reranker
+or prompt can recover it — which is why the agent tier is allowed to <i>search the taxonomy</i>
+rather than only pick from what it was handed.</p>
+
+<div class="note"><b>Prompt engineering as a measurable intervention.</b> A leaf named
+<code>ACCESSORY</code> is unfindable. The same leaf carrying its ancestor path and three real
+product titles is findable, including at zero training examples. Four cumulative label-document
+variants, measured on macro recall@50: name <b>0.837</b> → + hierarchy path <b>0.945</b> →
++ example products <b>0.977</b>.</div>
+
+<h2>What the threshold actually buys</h2>
+<p>The deferral gate is <code>argmax == OTHER or p_max &lt; τ</code>, so any τ below the
+operating point escalates a strict subset of the items already answered on disk. The entire
+curve below 0.900 is therefore a replay of cached results and costs nothing to produce.</p>
+{{FRONTIER}}
+<p>Micro <i>falls</i> 0.914 → 0.895 as τ rises while macro <i>climbs</i> 0.543 → 0.647, and
+zero-shot macro nearly doubles, 0.214 → 0.407. That is the project's thesis in one frame:
+escalating more items trades head-class accuracy for coverage of the tail and of leaves the
+classifier has never seen. <b>There is no knee.</b> Macro is still climbing at the operating
+point, which means the published τ — chosen for S1's precision in isolation, before the agent
+tier existed — is not known to be the end-to-end optimum. Finding where macro peaks requires
+escalating <i>more</i>, which is the one direction that costs money.</p>
+
+<h2>Findings that generalise</h2>
+<h3>1. Anything trained on the observed label distribution suppresses the unobserved tail</h3>
+<p>The fine-tuned cross-encoder scores macro recall@10 of <b>0.760</b> against the frozen
+retriever's <b>0.919</b> — it is worse than the model it was built to improve. The reason is
+structural: the 90 zero-training leaves appear in its training groups only as hard negatives,
+so it is taught they are always wrong, and its zero-shot recall@10 collapses to <b>0.124</b>.
+Its own gate says drop the tier. Interleaving both orderings instead keeps what each is good
+at: fusing costs 0.006 on few-shot and 0.016 on zero-shot, and buys 0.137 on head and 0.074 on
+torso.</p>
+
+<h3>2. Max-softmax is the wrong instrument for out-of-vocabulary detection</h3>
+<p>τ moves the confidence bar, but a class the model cannot represent does not produce low
+confidence — it produces confident wrong answers on a neighbouring class. That is why the gate
+is a disjunction with an explicit <code>OTHER</code> class rather than a threshold alone, and
+why 875 items defer regardless of τ.</p>
+
+<h3>3. The metric that selects a model is not the metric that describes its role</h3>
+<p>Macro-F1 evaluated the reranker as a classifier and chose the wrong one; the reranker's job
+is to put the gold leaf in a shortlist, so recall@k is its metric. Selecting on the convenient
+metric rather than the role-appropriate one is how a tier that hurts the system gets shipped
+looking like an improvement.</p>
+
+<h2>Serving</h2>
+<p>The cascade runs as a LangGraph state graph behind an HTTP endpoint. Nothing that produces a
+number is reimplemented — every node calls the same objects the offline evaluation calls, so
+the served path cannot drift from the measured one. Stage 3 is a swappable provider (hosted
+API, local model, or cached replay), and 46 assertions cover routing, abstention and the HTTP
+contract without loading any weights.</p>
+{{LATENCY}}
+<p>82% of requests are a single DistilBERT forward pass; 17% make a synchronous LLM call. The
+result is a p50 of 25 ms against a p95 of 2,182 ms — an <b>87× spread</b> on a mean of 409 ms
+that describes no request that was actually made. τ sets the mix, so the accuracy purchase
+above is also a latency purchase.</p>
+
+<div class="note warm"><b>Verification, not assumption.</b> Routing in the served path is
+exact — 0 deferral-decision flips over 400 sampled items. Retrieval is not, and the reason
+turned out to be a defect in the project's own artefacts: every cached embedding carries an
+fp16 fingerprint while the classifier probabilities are fp32, meaning they were produced on
+different machines, and nothing on disk recorded it. It was recovered by testing whether each
+stored float was exactly representable in half precision. The resulting ~4e-4 per-vector drift
+reshuffles a 530-way retrieval enough to cost 2.5 points of gold-leaf reachability, bounding
+end-to-end impact at <b>≤1.0% of micro</b> (95% Wilson). Arrays now carry a provenance sidecar
+recording resolved device and dtype.</div>
+
+<h2>Method: three times measurement beat inference</h2>
+<p>Each of these began as a confident explanation that was wrong, and ended in a cheap direct
+measurement that settled it. They are included because the habit is more transferable than
+any of the results above.</p>
+
+<h3>Provenance recovered from bit patterns</h3>
+<p>The retrieval divergence described above had four plausible causes. Three were eliminated
+by measurement rather than argument — forcing half precision on the serving side changed
+nothing, both paths provably build their input with the same function, and the encoder proved
+batch-invariant to 2.19e-04. The fourth was found by asking whether each stored float was
+exactly representable in fp16, which a true fp32 array satisfies with probability ~5e-4 per
+element and these satisfied at 1.0000. Arrays now carry a provenance sidecar so the question
+cannot recur.</p>
+
+<h3>The hypothesis that looked certain</h3>
+<p>Qwen3-Embedding pools the last token, which is only correct under left padding — and the
+tokenizer's default <code>padding_side</code> is <code>'right'</code>. That is a textbook
+silent-corruption bug and it explained the symptom. Measuring the behaviour instead of reading
+the attribute killed it: the same item encoded alone and in batches of 2, 8 and 16 differed by
+at most 2.19e-04, <i>identical</i> at every batch size and exactly zero for the longest items.
+Pad-token pooling would have shown ~1e-1 and grown with batch size. <b>The tokenizer attribute
+is not the behaviour.</b></p>
+
+<h3>An optimisation that never ran</h3>
+<p>The LLM tier marks its fixed prompt prefix for caching — 64% of every request is identical
+across items. Measured against the API's actual rule, the marked prefix was 882 tokens and the
+model's minimum cacheable prefix is 1,024. Below the minimum the API declines to cache
+<i>and returns no error</i>: both cache counters read zero. Moving the marker to cover the
+worked examples brought the prefix to 1,282 tokens and made it real — <b>68% off input cost</b>
+in warm steady state, verified from the cache-token fields the response itself reports.
+An optimisation that fails silently can be believed indefinitely.</p>
+
+<div class="note"><b>The through-line.</b> In all three cases the plausible inference lost to a
+measurement that took minutes. Two of the numbers in the parity investigation were artefacts of
+how they were measured before they were findings — a shortlist comparison too strict to return
+anything but "different," and an alignment keyed on an identifier the dataset duplicates. Both
+are documented in the repository alongside what the wrong version claimed, because a project
+that only records its successful measurements is not showing its method.</div>
+
+<h2>Honest limitations</h2>
+<ul>
+<li><b>The cascade loses to a linear SVM on three of five strata.</b> It wins overall macro
+because one stratum — zero-shot — is a regime the baseline cannot enter at all.</li>
+<li><b>The agent tier is significantly worse than its own shortlist's top candidate on the
+head stratum.</b> Measured with a paired McNemar test, not assumed.</li>
+<li><b>Abstention targeting is weak</b>: 7.6% rate, 25.3% recall, 31.4% precision. The largest
+single pool of recoverable error in the system.</li>
+<li><b>Evaluation uses ABO's own labels</b>, not a human-made gold set, and ABO is a phone-case
+dataset with a long tail attached — a good tail stress test, a poor proxy for a balanced
+production taxonomy.</li>
+<li><b>A serving path exists; this has not run in production.</b> No load test, no alerting,
+no authentication.</li>
+</ul>
+
+<footer>
+<span class="tag">PyTorch</span><span class="tag">Transformers</span><span class="tag">sentence-transformers</span><span class="tag">LangGraph</span><span class="tag">LangChain</span><span class="tag">LangSmith</span><span class="tag">FastAPI</span><span class="tag">Claude API</span><span class="tag">conformal prediction</span><span class="tag">McNemar</span>
+<div style="margin-top:2mm">Corpus: Amazon Berkeley Objects (CC BY-NC 4.0, attribution required, never redistributed).
+Every figure in this document comes from a run whose artefacts are on disk; the repository documents
+the measurements behind each decision, including the ones that failed.</div>
+</footer>
+</body></html>
