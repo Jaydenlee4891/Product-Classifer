@@ -33,6 +33,13 @@ The cascade exists for the second point. Everything else is engineering around i
 
 ## Architecture
 
+![One item through all four tiers](docs/cascade_walkthrough.gif)
+
+*ASIN B07765Z6S4, a tail-stratum item, traced through the real pipeline. Note S1's output:
+`__OTHER__` at p_max **0.9987** — it defers while 99.87% confident, because the gate is
+`argmax == OTHER OR p_max < τ`, not a threshold alone. Rebuild with
+`python docs/portfolio/make_gif.py`.*
+
 ```
 item ──▶ S1  DistilBERT over 69 head classes + OTHER
          │   answers 83.5% of items at 0.977 accuracy
