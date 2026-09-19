@@ -31,8 +31,7 @@ from sentence_transformers import SentenceTransformer
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
-from recall import (MODEL as BI_MODEL, assert_finite, embed_items, load_model,
-                    pick_device, save_array)
+from recall import (assert_finite, embed_items, load_model, pick_device, save_array)
 
 SEED = 17
 

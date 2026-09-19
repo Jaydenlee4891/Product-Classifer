@@ -20,3 +20,8 @@ __pycache__/
 # scratch and unrelated projects that live in this folder
 Claude outputs/
 Manware-s-AI-Learning-Toolkit/
+
+# interview preparation — written as instructions to a tutor, not repository content.
+# NOTE: this file was tracked once (commit 99d6cb8) before being removed, so ignoring it
+# only stops it coming back; it does not erase it from that commit's history.
+interview-brief.md

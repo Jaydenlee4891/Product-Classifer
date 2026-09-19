@@ -1,5 +1,7 @@
 # Long-Tail Cascade Classifier
 
+[![tests](https://github.com/Jaydenlee4891/Product-Classifer/actions/workflows/tests.yml/badge.svg)](https://github.com/Jaydenlee4891/Product-Classifer/actions/workflows/tests.yml)
+
 A four-tier classifier for taxonomies where most labels are rare and some have no training
 data at all. Each tier answers what it can and defers the rest, so cost and capability rise
 only for the items that need them.
@@ -16,8 +18,8 @@ was made, the measurement that settled it is given next to it.
 
 ## The problem
 
-Real taxonomies are Zipfian. In Amazon Berkeley Objects, one leaf is 44% of the corpus and
-231 leaves have fewer than ten items. Two consequences shape everything here:
+Real taxonomies are Zipfian. In Amazon Berkeley Objects, one leaf is 53.5% of the corpus
+and 245 leaves have fewer than ten items in it. Two consequences shape everything here:
 
 **Accuracy is meaningless.** Predicting `CELLULAR_PHONE_CASE` for everything scores 53%
 micro. Every metric below is reported micro (per item) *and* macro (per leaf), and **macro
@@ -66,7 +68,7 @@ ABO listings metadata, audited rather than trusted:
 | Records | 147,702 | **121,133** |
 | Leaves (`product_type`) | 576 | **530** |
 | English `item_name` | 83.1% | 100% |
-| Largest leaf | `CELLULAR_PHONE_CASE`, 44% | 53.5% of train |
+| Largest leaf | `CELLULAR_PHONE_CASE`, 53.5% | 53.5% of train, 53.1% of test |
 
 Splits are **80/10/10 stratified per leaf**, seed 17 — train 96,857 / val 12,076 /
 test 12,200. Leaves with fewer than three items send one item to test and keep the rest in
@@ -400,6 +402,7 @@ src/stage3_agent.py      Batch API agent tier, ablations, --dry-run
 src/shortlist.py         the one shortlist implementation, shared by both callers
 src/pipeline.py          Cascade object + end-to-end evaluation with stage attribution
 src/test_pipeline.py     21 assertions, no model required
+src/check_docs.py        fails the build when the README stops describing the code
 src/sweep.py             tau frontier replayed from cached Stage 3 answers — costs nothing
 src/provenance.py        which device and precision produced each array in data/
 src/serve/graph.py       the cascade as a LangGraph state graph over the same Cascade object
@@ -408,8 +411,8 @@ src/serve/app.py         FastAPI endpoint, weights loaded once at startup
 src/serve/verify.py      served path vs the offline arrays
 src/serve/bench.py       per-tier latency, cold start excluded and reported separately
 src/serve/diagnose_embedding.py   padding, batch-invariance and cache provenance probes
-src/serve/test_graph.py  20 routing assertions, no weights required
-src/serve/test_app.py    18 endpoint assertions, no weights required
+src/serve/test_graph.py  26 routing assertions, no weights required
+src/serve/test_app.py    20 endpoint assertions, no weights required
 ```
 
 `shortlist.py` exists because the shortlist was implemented twice and the two drifted — a
@@ -492,7 +495,9 @@ the full 610,000-pair test pass takes about two hours.
 produces a number is reimplemented: every node calls the same `Cascade` methods the
 offline evaluation calls, and the retrieval node is copied from `Cascade.predict`. The
 layer contributes routing, per-tier timing, and one rule — an abstention ends with **no
-label**, never a silent fallback to S2's top-1, matching `pipeline.evaluate`.
+label**, never a silent fallback to S2's top-1, matching `pipeline.evaluate`. Stage 3 is a
+swappable provider (hosted API, local model, or cached replay), and 46 assertions cover
+routing, abstention and the HTTP contract without loading any weights.
 
 ```
 uvicorn serve.app:app --app-dir src --port 8000      # / redirects to /docs
@@ -626,6 +631,11 @@ which is the one direction that costs money.
 
 ## Known limitations
 
+- **Stage 3 is a single structured LLM call, not an agent loop.** One forced tool call
+  over a closed candidate set: no tool selection, no multi-turn state, no stopping
+  criterion. It is referred to as the LLM tier throughout for that reason. The multi-turn
+  version that could search the taxonomy and break the retrieval ceiling is designed in
+  `src/stage3_agent.py` and explicitly not built — see Next.
 - **Serving parity is bounded, not clean.** The endpoint reproduces routing exactly but
   not retrieval shortlists, at a measured ≤1.0% of micro. The cause is cross-device
   artefact provenance, not the serving layer — see above.
@@ -657,13 +667,17 @@ which is the one direction that costs money.
 
 ## Next
 
-1. Widen S1's label space beyond 69 leaves, or put a linear model behind the classes
+1. **Build the second pass in `stage3_agent.py`** — the multi-turn loop with a taxonomy
+   search tool, run only on the residual this tier abstains on. It is the one component
+   that can recover the 9.4% of escalated items whose correct leaf was never retrieved,
+   and the evaluation harness to prove whether it does already exists.
+2. Widen S1's label space beyond 69 leaves, or put a linear model behind the classes
    DistilBERT cannot reach — the change the baseline comparison argues for.
-2. Fix abstention targeting.
-3. Route head-stratum deferrals around S3.
-4. Energy or max-logit as the deferral score instead of max-softmax — one inference pass,
+3. Fix abstention targeting.
+4. Route head-stratum deferrals around S3.
+5. Energy or max-logit as the deferral score instead of max-softmax — one inference pass,
    and it attacks finding 3 directly.
-5. A larger reranker (`bge-reranker-base`, 278M) — the direct answer to finding 2.
+6. A larger reranker (`bge-reranker-base`, 278M) — the direct answer to finding 2.
 
 ---
 

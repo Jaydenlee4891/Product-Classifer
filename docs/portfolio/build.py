@@ -22,12 +22,12 @@ ARCH = '''<figure><svg viewBox="0 0 772 200" xmlns="http://www.w3.org/2000/svg"
 <g font-size="11" font-weight="700" fill="#141412">
  <text x="94" y="117">S1 &middot; DistilBERT</text>
  <text x="284" y="117">S2 &middot; retrieve + rerank</text>
- <text x="520" y="117">S3 &middot; LLM agent</text>
+ <text x="520" y="117">S3 &middot; LLM tier</text>
 </g>
 <g font-size="9" fill="#82817c">
  <text x="94" y="131">69 head classes + OTHER</text>
  <text x="284" y="131">530 label documents &rarr; top-10</text>
- <text x="520" y="131">forced tool call</text>
+ <text x="520" y="131">one forced tool call</text>
 </g>
 <g font-size="9.5" fill="#2a78d6" font-weight="700">
  <text x="156" y="52">83.5% answered here &mdash; accuracy 0.977</text>

@@ -80,8 +80,8 @@ by 0.024. Where that trade comes from is the whole project.</p>
 
 <h2>The problem</h2>
 <div class="cols">
-<p>Real taxonomies are Zipfian. In Amazon Berkeley Objects, one leaf is 44% of the corpus and
-231 leaves have fewer than ten items. Two consequences shape everything.</p>
+<p>Real taxonomies are Zipfian. In Amazon Berkeley Objects, one leaf is 53.5% of the corpus
+and 245 leaves have fewer than ten items in it. Two consequences shape everything.</p>
 <p><b>Accuracy is meaningless.</b> Predicting <code>CELLULAR_PHONE_CASE</code> for everything
 scores 53% micro. Every number here is reported micro (per item) and macro (per leaf), and
 macro is the one to read.</p>
@@ -99,7 +99,7 @@ all. Everything else is engineering around that fact.</p>
 <tr><th>Tier</th><th>Model</th><th>Role</th><th class="n">Share</th><th class="n">Accuracy</th></tr>
 <tr><td>S1</td><td>DistilBERT, 69 head classes + <code>OTHER</code></td><td>answer the head, defer the rest</td><td class="n">83.5%</td><td class="n">0.977</td></tr>
 <tr><td>S2</td><td>frozen Qwen3-Embedding-0.6B + fine-tuned MiniLM cross-encoder</td><td>retrieve and rank 10 candidates from 530 <span class="k">(macro recall@10)</span></td><td class="n">—</td><td class="n">0.931</td></tr>
-<tr><td>S3</td><td>Claude Sonnet 4.5, forced tool call</td><td>choose from the shortlist, or abstain</td><td class="n">16.5%</td><td class="n">—</td></tr>
+<tr><td>S3</td><td>Claude Sonnet 4.5, forced tool call <span class="k">(one call — not an agent loop)</span></td><td>choose from the shortlist, or abstain</td><td class="n">16.5%</td><td class="n">—</td></tr>
 </table>
 
 <p>S1 defers when <code>argmax == OTHER</code> <b>or</b> <code>p_max &lt; 0.900</code>. The
@@ -221,6 +221,10 @@ single pool of recoverable error in the system.</li>
 <li><b>Evaluation uses ABO's own labels</b>, not a human-made gold set, and ABO is a phone-case
 dataset with a long tail attached — a good tail stress test, a poor proxy for a balanced
 production taxonomy.</li>
+<li><b>Stage 3 is one structured LLM call, not an agent loop.</b> No tool selection, no
+multi-turn state, no stopping criterion. The multi-turn version that could search the
+taxonomy — the only design here able to reach the 9.4% of escalated items whose correct
+leaf was never retrieved — is specified and not built.</li>
 <li><b>A serving path exists; this has not run in production.</b> No load test, no alerting,
 no authentication.</li>
 </ul>

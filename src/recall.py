@@ -170,7 +170,7 @@ def recall_table(
         if k <= max_k:
             res[f"hit{k}"] = hit[:, :k].any(1)
 
-    # micro = per item, macro = per leaf. They diverge hard here: one ABO leaf is 44% of
+    # micro = per item, macro = per leaf. They diverge hard here: one ABO leaf is 53.5% of
     # the corpus, so a micro average is close to a report on that single class. Macro is
     # the number that describes the taxonomy.
     rows = {}
@@ -246,7 +246,7 @@ def main() -> None:
     print("\nmacro-averaged recall@20 — the table to show\n")
     print(pivot.to_string(float_format=lambda v: f"{v:.3f}"))
     print("\n(macro = averaged over leaves. The micro column in recall.csv is averaged")
-    print(" over items, where one leaf is ~44% of ABO and dominates the number.)")
+    print(" over items, where one leaf is 53.5% of ABO and dominates the number.)")
 
     best = variants[-1]
     overall = result[(result.stratum == "ALL") & (result.variant == best)]["macro@20"]

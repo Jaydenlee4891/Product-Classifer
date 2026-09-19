@@ -3,7 +3,8 @@
 Everything else in that file is glue over stages that already have their own measured
 gates. Two pieces are new and therefore untested by any of those runs:
 
-  1. _shortlist's 'fused' mode — an interleave-and-dedup over two orderings.
+  1. shortlist.build_shortlist's 'fused' mode — an interleave-and-dedup over two
+     orderings. It lives in shortlist.py; pipeline.Cascade._shortlist is a thin caller.
   2. evaluate's Stage 3 fold-in — in particular that an abstention becomes its own tier
      instead of being scored as a wrong answer inside S3.
 

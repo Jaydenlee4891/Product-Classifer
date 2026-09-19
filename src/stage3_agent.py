@@ -3,18 +3,26 @@
 Composes S1 and S2, then resolves what neither could settle.
 
   compose   S1 defers an item -> S2 supplies a ranked shortlist -> this stage decides.
-  pass 1    Batch API, one structured call per item, choose from the shortlist or abstain.
-            Cheap, parallel, handles the bulk.
-  pass 2    The residual from pass 1 (abstained or unsure) gets an agent loop with tools.
-            Small volume, so a real multi-turn loop is affordable here and nowhere else.
+  decide    Batch API, ONE structured call per item: choose from the shortlist or abstain.
 
-The reason pass 2 exists, and the reason it has tools:
+WHAT THIS IS, PRECISELY. A single forced tool call over a closed candidate set. There is
+no loop, no tool selection, no state carried between turns and no stopping criterion --
+so this is structured output with a schema, NOT an agent. The module is named
+stage3_agent.py for historical reasons and the tier is referred to as "the LLM tier"
+everywhere it is described. Do not call it an agent; a reader who checks main() will find
+one API call and stop believing the rest of the file.
 
-    Every stage below this one is trapped inside the retriever's top-K. If the correct
-    leaf was never retrieved -- 2.3% of items at K=50 -- no reranker, threshold or
-    prediction set can recover it. An agent that can SEARCH THE TAXONOMY can. That is
-    the only component in the whole cascade able to break the retrieval ceiling, which
-    is what earns it a tier of its own.
+NOT BUILT: the second pass. The design below is real and the motivation is measured, but
+no code here implements it, and nothing downstream assumes it exists.
+
+    Every stage is trapped inside the retriever's top-K. If the correct leaf was never
+    retrieved -- 9.4% of escalated items at K=50, shortlist 10 -- no reranker, threshold
+    or prediction set can recover it. An agent that could SEARCH THE TAXONOMY could: it
+    is the only design in the cascade able to break the retrieval ceiling. It would take
+    the residual this pass abstains on (7.6% of escalated items, ~153 items), which is
+    small enough that a real multi-turn loop is affordable there and nowhere else.
+
+    That is a plan, not a feature. See README > Next.
 
 Two prompt decisions that are load-bearing, both testable with --ablate:
 

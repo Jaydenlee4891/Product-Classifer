@@ -20,7 +20,7 @@ CE = ["TOILET_PAPER_HOLDER","CLEANING_BRUSH","PLUMBING_FIXTURE","HOME","FOOD_SER
 FUSED = ["TOILET_PAPER_HOLDER","PAPER_TOWEL_HOLDER","CLEANING_BRUSH","PLUMBING_FIXTURE",
          "TOOTHBRUSH_HOLDER","HOME","FOOD_SERVICE_SUPPLY","JANITORIAL_SUPPLY","TOWEL_HOLDER","POT_HOLDER"]
 TIERS = [("S1", "DistilBERT\n69 classes + OTHER"), ("S2a", "bi-encoder\nretrieve 50 of 530"),
-         ("S2b", "cross-encoder\nrerank + fuse"), ("S3", "LLM agent\nforced tool call")]
+         ("S2b", "cross-encoder\nrerank + fuse"), ("S3", "LLM tier\none forced call")]
 
 def base(active=None, step=""):
     fig = plt.figure(figsize=(W, H), dpi=DPI, facecolor="white")
@@ -169,10 +169,11 @@ emit(fig, 3200)
 
 # 6 — the agent
 fig, ax = base(3, "Tier 3 · candidates shuffled, forced tool call · ~1,800 ms")
-ax.text(.255, .855, "The 10 candidates are SHUFFLED before the model sees them",
+ax.text(.255, .862, "One forced tool call over a closed set — not an agent loop",
         fontsize=9.5, color=INK, fontweight="bold")
-ax.text(.255, .805, "Presented in rank order an LLM anchors on position 1 — and you have built\n"
-        "an expensive way to agree with the bi-encoder.", fontsize=8.2, color=INK2, linespacing=1.6)
+ax.text(.255, .800, "The 10 candidates are SHUFFLED first: presented in rank order an LLM anchors on\n"
+        "position 1, and you have built an expensive way to agree with the bi-encoder.",
+        fontsize=8.2, color=INK2, linespacing=1.6)
 card(ax, .255, .30, .715, .44, fc="#0f1720", ec="#0f1720")
 ax.text(.278, .665, "tool_choice = {\"type\": \"tool\", \"name\": \"record_category\"}",
         fontsize=8.6, color="#7fb2f0", family="DejaVu Sans Mono", zorder=3)

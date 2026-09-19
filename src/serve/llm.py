@@ -1,6 +1,6 @@
 """Stage 3 as a swappable node.
 
-Four providers behind one call signature. The point is that the tier the cascade
+Five providers behind one call signature. The point is that the tier the cascade
 escalates to is a configuration choice, not a rewrite:
 
   anthropic   LangChain chat model, forced tool call. The reference arm.
