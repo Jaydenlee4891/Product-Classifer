@@ -2,7 +2,7 @@
 #
 # `fast` runs the serving-layer suites and the documentation check on a plain Python
 # install -- no torch, no transformers, no model weights. It finishes in well under a
-# minute, which is the point: 102 of the 123 assertions in this repository were written to
+# minute, which is the point: 114 of the 135 assertions in this repository were written to
 # be runnable without a GPU or a checkpoint, and that design decision is only worth
 # anything if something actually exercises it on a clean machine.
 #

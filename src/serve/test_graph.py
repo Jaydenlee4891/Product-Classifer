@@ -189,12 +189,60 @@ def test_cached_provider_without_item_id():
     check("and keeps S2's top-1", out["leaf"] == out["shortlist"][0])
 
 
+def test_live_provider_grounding():
+    """The prompt says "exactly one category id from the list", but the old check only
+    tested the whole taxonomy, so a real id that was NOT offered would have passed. Zero
+    such answers were measured in the recorded run; that is a measurement, and this makes
+    it a rule for every live provider."""
+    print("\nlive provider grounding")
+    from serve.llm import Stage3, Stage3Config
+    s3 = Stage3.__new__(Stage3)
+    s3.cfg, s3.leaves, s3.last_usage = Stage3Config(provider="anthropic"), LEAVES, None
+    s3._render = lambda item, shortlist: ("item", "candidates")
+    said = {}
+    s3._call_anthropic = lambda item_text, cand_text: said["v"]
+    shown = np.array([1, 2, 3])                       # L1, L2, L3
+
+    said["v"] = {"leaf_id": "L2", "confidence": "certain"}
+    d = s3.decide({}, shown)
+    check("an answer from the shown shortlist is accepted", d.leaf == "L2" and d.reason is None)
+
+    said["v"] = {"leaf_id": "L9", "confidence": "certain"}
+    d = s3.decide({}, shown)
+    check("a real id that was not shown is rejected as ungrounded",
+          d.leaf is None and d.abstained is False and d.reason == "ungrounded")
+
+    said["v"] = {"leaf_id": "NOT_A_LEAF", "confidence": "certain"}
+    check("an id outside the taxonomy is invalid_id, a different failure",
+          s3.decide({}, shown).reason == "invalid_id")
+
+    said["v"] = {"leaf_id": "NONE_OF_THESE", "confidence": "certain"}
+    d = s3.decide({}, shown)
+    check("an abstention needs no grounding", d.abstained is True and d.reason is None)
+
+    said["v"] = None
+    check("no parseable answer is unparseable", s3.decide({}, shown).reason == "unparseable")
+
+    cached = Stage3.__new__(Stage3)
+    cached.cfg, cached.leaves = Stage3Config(provider="cached"), LEAVES
+    cached._replay = {"K": "L9"}
+    check("the cached provider is exempt: its answers were given against another shortlist",
+          cached.decide({}, shown, item_id="K").leaf == "L9")
+
+    said["v"] = {"leaf_id": "L19", "confidence": "certain"}      # real, and not on the page
+    out = run(StubCascade(pred=0, pmax=0.5), s3)
+    check("end to end, an ungrounded answer is reported as S2, not as a Stage 3 decision",
+          out["stage"] == "S2")
+    check("and the item keeps S2's top-1", out["leaf"] == out["shortlist"][0])
+
+
 def main():
     test_routing()
     test_abstention_and_failures()
     test_provider_none()
     test_shortlist_shape()
     test_cached_provider_without_item_id()
+    test_live_provider_grounding()
     print("\n" + ("ALL PASS" if not FAILURES else f"{len(FAILURES)} FAILURES: {FAILURES}"))
     sys.exit(0 if not FAILURES else 1)
 

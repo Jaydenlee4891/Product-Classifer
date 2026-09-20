@@ -91,6 +91,10 @@ class Decision:
     provider: str
     raw: dict | None = field(default=None, repr=False)
     usage: dict | None = field(default=None, repr=False)
+    # Why there is no label when `abstained` is False: unparseable | invalid_id |
+    # ungrounded. Kept apart because they are different failures with different fixes,
+    # and lumping them is how a hallucination rate gets under- or over-stated.
+    reason: str | None = None
 
 
 @dataclass
@@ -311,14 +315,24 @@ class Stage3:
         if not args or not isinstance(args.get("leaf_id"), str):
             # A parse failure is not an abstention. It gets no label and is marked so it
             # cannot be counted as a principled refusal in the attribution table.
-            return Decision(None, None, False, p, raw=args, usage=u)
+            return Decision(None, None, False, p, raw=args, usage=u, reason="unparseable")
         leaf = args["leaf_id"]
         if leaf == ABSTAIN:
             return Decision(None, args.get("confidence"), True, p, raw=args, usage=u)
         if leaf not in self.leaves:
             # The model invented an id. Same treatment as a parse failure.
             return Decision(None, args.get("confidence"), False, p, raw=args,
-                            usage=self.last_usage)
+                            usage=self.last_usage, reason="invalid_id")
+        # GROUNDING. The prompt says "exactly one category id from the list", but a real id
+        # that was NOT in the list passes the check above, which tests the whole taxonomy.
+        # Measured on the recorded run that never happens (0 of 1,862 answers), which is a
+        # measurement, not a guarantee -- so it is enforced here. A live model was shown
+        # exactly this shortlist. The cached provider is exempt on purpose: it replays
+        # answers given against the OFFLINE shortlist, and the served one can differ
+        # (see README, serving parity), so enforcing there would reject valid replays.
+        if p != "cached" and leaf not in {self.leaves[i] for i in shortlist_idx}:
+            return Decision(None, args.get("confidence"), False, p, raw=args,
+                            usage=self.last_usage, reason="ungrounded")
         return Decision(leaf, args.get("confidence"), False, p, raw=args,
                         usage=self.last_usage)
 

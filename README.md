@@ -412,9 +412,9 @@ src/serve/app.py         FastAPI endpoint, weights loaded once at startup
 src/serve/verify.py      served path vs the offline arrays
 src/serve/bench.py       per-tier latency, cold start excluded and reported separately
 src/serve/diagnose_embedding.py   padding, batch-invariance and cache provenance probes
-src/serve/test_graph.py  26 routing assertions, no weights required
+src/serve/test_graph.py  34 routing assertions, no weights required
 src/serve/test_app.py    20 endpoint assertions, no weights required
-src/serve/test_agent.py  56 agent-loop assertions, scripted model, no weights or key required
+src/serve/test_agent.py  60 agent-loop assertions, scripted model, no weights or key required
 src/agent_pass2.py       evaluates the second pass on Stage 3's abstentions; --dry-run is free
 src/serve_django/        the same cascade behind Django — see its README for why
 src/serve_django/test_django.py  26 endpoint assertions, no weights required
@@ -501,7 +501,7 @@ produces a number is reimplemented: every node calls the same `Cascade` methods 
 offline evaluation calls, and the retrieval node is copied from `Cascade.predict`. The
 layer contributes routing, per-tier timing, and one rule — an abstention ends with **no
 label**, never a silent fallback to S2's top-1, matching `pipeline.evaluate`. Stage 3 is a
-swappable provider (hosted API, local model, or cached replay), and 102 assertions cover
+swappable provider (hosted API, local model, or cached replay), and 114 assertions cover
 routing, abstention, the HTTP contract and the agent loop without loading any weights.
 
 ```
@@ -658,6 +658,12 @@ which is the one direction that costs money.
   bug no scripted test could (the installed SDK rejects a `temperature` argument) and says
   nothing about how many items it recovers: that rate is unmeasured. It also cannot reach the 142 escalated items whose gold leaf was
   missing from the shortlist but which Stage 3 labelled confidently instead of abstaining.
+- **Grounding is enforced for live providers only.** Stage 3 rejects a real category id
+  that was not among the 10 shown, and the agent rejects ids it was never shown; the
+  rejection is recorded as `reason="ungrounded"`, distinct from an invented id. The
+  cached provider replays answers given against the offline shortlist, which the served
+  one can differ from, so it is exempt. For the recorded run, zero ungrounded answers
+  (0 of 1,862) is therefore a measurement, not a guarantee.
 - **Serving parity is bounded, not clean.** The endpoint reproduces routing exactly but
   not retrieval shortlists, at a measured ≤1.0% of micro. The cause is cross-device
   artefact provenance, not the serving layer — see above.

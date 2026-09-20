@@ -15,8 +15,9 @@ NOT an agent. This is:
   stopping    it records a category, OR it abstains, OR the step budget runs out. On the
               last permitted turn the tool choice is forced to record_category, so the loop
               cannot end by running off the edge.
-  recovery    an invalid id or an abstention with no search is REJECTED as a tool error and
-              the model gets the turn back -- the code enforces what the prompt asks for.
+  recovery    an invented id, an id it was never shown, or an abstention with no search is
+              REJECTED as a tool error and the model gets the turn back -- the code
+              enforces what the prompt asks for.
 
 It runs only on items Stage 3 abstained on (7.6% of escalated items, 153 of 2,015), so a
 multi-turn loop is affordable there and nowhere else.
@@ -263,9 +264,14 @@ class Stage3Agent:
         self.system = AGENT_SYSTEM.replace(f"You have {MAX_STEPS} turns",
                                            f"You have {max_steps} turns")
 
-    def _reject(self, leaf, searched: bool, last: bool) -> str | None:
+    def _reject(self, leaf, searched: bool, last: bool, seen: set) -> str | None:
         """Why a record_category call cannot be accepted, or None. These are returned to
-        the model as tool errors, so it can fix them within its remaining turns."""
+        the model as tool errors, so it can fix them within its remaining turns.
+
+        `seen` is every id that has appeared in the candidates or in any tool result. The
+        prompt asks for answers from ids it has actually seen; this makes it a rule. A REAL
+        id it was never shown is still refused: recalling a category from memory is exactly
+        the ungrounded answer the closed candidate set exists to prevent."""
         if not isinstance(leaf, str):
             return "error: leaf_id must be a string."
         if leaf == S3.NONE:
@@ -276,6 +282,9 @@ class Stage3Agent:
         if leaf not in self.index:
             return (f"error: {leaf!r} is not a category id. Use search_taxonomy or "
                     f"get_category to find a valid id, or answer {S3.NONE}.")
+        if leaf not in seen:
+            return (f"error: {leaf!r} has not appeared in the candidates or in any tool "
+                    "result. Search for it, or choose a category you have seen.")
         return None
 
     def run(self, item: dict, shortlist_idx) -> AgentResult:
@@ -287,6 +296,7 @@ class Stage3Agent:
         steps: list[dict] = []
         usage = {"input": 0, "output": 0}
         searched = False
+        seen = {self.index.leaves[i] for i in shortlist_idx}
 
         for n in range(1, self.max_steps + 1):
             last = n == self.max_steps
@@ -306,7 +316,7 @@ class Stage3Agent:
                 name, args, t0 = tu.get("name"), tu.get("input") or {}, time.perf_counter()
                 ids: list[str] = []
                 if name == RECORD:
-                    err = self._reject(args.get("leaf_id"), searched, last)
+                    err = self._reject(args.get("leaf_id"), searched, last, seen)
                     if err is None:
                         steps.append({"step": n, "tool": name, "input": args, "error": False,
                                       "ms": round((time.perf_counter() - t0) * 1000, 2)})
@@ -323,6 +333,7 @@ class Stage3Agent:
                     text, ids = self.index.get_category(args.get("leaf_id"))
                 else:
                     text = f"error: unknown tool {name!r}."
+                seen.update(ids)
                 is_err = text.startswith("error")
                 steps.append({"step": n, "tool": name, "input": args, "returned": ids,
                               "error": is_err,

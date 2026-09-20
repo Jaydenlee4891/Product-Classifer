@@ -168,10 +168,10 @@ def test_loop():
     check("a reply with no tool call ends the loop with no label",
           r.leaf is None and not r.abstained and r.stopped == "no_tool")
 
-    a, _ = agent([call("browse_shelves")], [record("MOUSE")])
+    a, _ = agent([call("browse_shelves")], [record("SHOES")])      # SHOES is in SHORT
     r = a.run(ITEM, SHORT)
     check("an unknown tool is an error the model can recover from",
-          r.steps[0]["error"] and r.leaf == "MOUSE")
+          r.steps[0]["error"] and r.leaf == "SHOES")
 
 
 def test_stopping():
@@ -226,6 +226,25 @@ def test_guards():
     r = a.run(ITEM, SHORT)
     check("a valid answer never carries an error step", not any(
         s["error"] for s in r.steps))
+
+    # GROUNDING: a REAL id is still refused if it was never shown. SHORT holds
+    # TOILET_PAPER_HOLDER, TOWEL_RING and SHOES; MOUSE is in the taxonomy but nowhere on
+    # the page, so answering it is recall from memory, not a choice among what was offered.
+    a, c = agent([record("MOUSE")], [record("SHOES")])
+    r = a.run(ITEM, SHORT)
+    check("a real id that was never shown is rejected", r.steps[0]["error"] is True)
+    check("the rejection says why, and the model can then answer from what it has seen",
+          "has not appeared" in str(c.calls[1]["last_user"]) and r.leaf == "SHOES")
+
+    a, _ = agent([call("get_category", leaf_id="SHOES")], [record("SANDALS")])
+    r = a.run(ITEM, SHORT)
+    check("a sibling revealed by get_category counts as seen",
+          r.leaf == "SANDALS" and not any(s["error"] for s in r.steps))
+
+    a, _ = agent([call("search_taxonomy", query="shoes", k=1)], [record("MOUSE")], max_steps=2)
+    r = a.run(ITEM, SHORT)
+    check("an unseen id on the forced last turn ends the loop with no label",
+          r.leaf is None and r.stopped == "invalid" and not r.abstained)
 
 
 # ---------------------------------------------------------------- the graph
