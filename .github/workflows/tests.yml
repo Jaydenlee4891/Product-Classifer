@@ -1,0 +1,65 @@
+# Two jobs, split by whether they need a deep-learning stack.
+#
+# `fast` runs the serving-layer suites and the documentation check on a plain Python
+# install -- no torch, no transformers, no model weights. It finishes in well under a
+# minute, which is the point: 46 of the 67 assertions in this repository were written to
+# be runnable without a GPU or a checkpoint, and that design decision is only worth
+# anything if something actually exercises it on a clean machine.
+#
+# `full` adds CPU torch and the rest of requirements.txt to run the pipeline unit tests.
+# It is slower and kept separate so a documentation typo does not wait on a torch install.
+#
+# Neither job needs data/. Nothing here touches an API key, so forks and pull requests run
+# the same checks with no secrets.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fast:
+    name: serving tests + docs (no weights)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (no torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "numpy>=1.24" "pandas>=2.0" "langgraph>=1.0,<2" \
+                      "langchain-core>=1.0,<2" "fastapi>=0.115" "httpx<1" "django>=5.0"
+      - name: Routing tests
+        run: python src/serve/test_graph.py
+      - name: Endpoint tests (FastAPI)
+        run: python src/serve/test_app.py
+      - name: Endpoint tests (Django)
+        run: python src/serve_django/test_django.py
+      - name: Documentation matches the code
+        run: python src/check_docs.py
+
+  full:
+    name: pipeline tests (CPU torch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU torch first
+        # The CPU wheel index keeps this at ~200MB instead of pulling the CUDA build,
+        # which is 2GB+ and useless on a runner with no GPU.
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install the rest
+        run: pip install -r requirements.txt
+      - name: Pipeline tests
+        run: python src/test_pipeline.py
