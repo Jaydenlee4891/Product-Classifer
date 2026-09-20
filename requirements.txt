@@ -22,5 +22,9 @@ langchain-core>=1.0,<2
 langchain-anthropic>=1.0,<2      # provider 'anthropic'
 fastapi>=0.115
 uvicorn[standard]>=0.30
+# the Django front end (src/serve_django) — an alternative to the FastAPI one, not an
+# addition to it; neither is needed to run the offline pipeline
+django>=5.0
+
 # provider 'ollama', local arm only — not needed for the cached or Anthropic paths
 # langchain-ollama>=1.0,<2

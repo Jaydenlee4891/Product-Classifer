@@ -413,6 +413,8 @@ src/serve/bench.py       per-tier latency, cold start excluded and reported sepa
 src/serve/diagnose_embedding.py   padding, batch-invariance and cache provenance probes
 src/serve/test_graph.py  26 routing assertions, no weights required
 src/serve/test_app.py    20 endpoint assertions, no weights required
+src/serve_django/        the same cascade behind Django — see its README for why
+src/serve_django/test_django.py  23 endpoint assertions, no weights required
 ```
 
 `shortlist.py` exists because the shortlist was implemented twice and the two drifted — a
@@ -604,6 +606,18 @@ deferred request after a restart pays **10.8s** to load Qwen3-Embedding-0.6B, ag
 for S1 and the cross-encoder at startup. 82% of requests never touch it, which is why it
 is lazy, and why that 10.8s is a property to document rather than a number to bury in a
 tail.
+
+**Two front ends, one cascade.** `src/serve_django/` serves the identical
+`CascadeRuntime` behind Django, with the same request shape, the same response keys and the
+same rounding, so a client cannot tell which is answering. It exists because the difference
+between the two is process model, not style: FastAPI's lifespan handler loads the weights
+once per process and a uvicorn deployment is usually one process, whereas
+`AppConfig.ready()` runs once per *worker* — and at this service's measured 409 ms mean,
+10 req/s wants about six sync workers, which is **~18GB of weights for one service**. It
+also runs for every management command, so loading is opt-in via `CASCADE_PRELOAD` and
+lazy by default. The reasoning, including why `gunicorn --preload` is not the fix and where
+LangSmith context fails to cross a Celery boundary, is in
+[src/serve_django/README.md](src/serve_django/README.md).
 
 **Keys and tracing.** `.env.example` documents every variable. Two are worth knowing
 before the first live call: an organisation-level API key is not tied to a workspace and
