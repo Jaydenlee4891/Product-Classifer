@@ -407,12 +407,15 @@ src/sweep.py             tau frontier replayed from cached Stage 3 answers — c
 src/provenance.py        which device and precision produced each array in data/
 src/serve/graph.py       the cascade as a LangGraph state graph over the same Cascade object
 src/serve/llm.py         Stage 3 as a swappable node: anthropic | raw | cached | ollama | none
+src/serve/agent.py       second pass: a bounded agent loop that can search the taxonomy
 src/serve/app.py         FastAPI endpoint, weights loaded once at startup
 src/serve/verify.py      served path vs the offline arrays
 src/serve/bench.py       per-tier latency, cold start excluded and reported separately
 src/serve/diagnose_embedding.py   padding, batch-invariance and cache provenance probes
 src/serve/test_graph.py  26 routing assertions, no weights required
 src/serve/test_app.py    20 endpoint assertions, no weights required
+src/serve/test_agent.py  52 agent-loop assertions, scripted model, no weights or key required
+src/agent_pass2.py       evaluates the second pass on Stage 3's abstentions; --dry-run is free
 src/serve_django/        the same cascade behind Django — see its README for why
 src/serve_django/test_django.py  26 endpoint assertions, no weights required
 ```
@@ -498,8 +501,8 @@ produces a number is reimplemented: every node calls the same `Cascade` methods 
 offline evaluation calls, and the retrieval node is copied from `Cascade.predict`. The
 layer contributes routing, per-tier timing, and one rule — an abstention ends with **no
 label**, never a silent fallback to S2's top-1, matching `pipeline.evaluate`. Stage 3 is a
-swappable provider (hosted API, local model, or cached replay), and 46 assertions cover
-routing, abstention and the HTTP contract without loading any weights.
+swappable provider (hosted API, local model, or cached replay), and 98 assertions cover
+routing, abstention, the HTTP contract and the agent loop without loading any weights.
 
 ```
 uvicorn serve.app:app --app-dir src --port 8000      # / redirects to /docs
@@ -647,9 +650,13 @@ which is the one direction that costs money.
 
 - **Stage 3 is a single structured LLM call, not an agent loop.** One forced tool call
   over a closed candidate set: no tool selection, no multi-turn state, no stopping
-  criterion. It is referred to as the LLM tier throughout for that reason. The multi-turn
-  version that could search the taxonomy and break the retrieval ceiling is designed in
-  `src/stage3_agent.py` and explicitly not built — see Next.
+  criterion. It is referred to as the LLM tier throughout for that reason.
+- **The second-pass agent is built and has never been run live.** `src/serve/agent.py` is
+  a bounded loop with a taxonomy-search tool, invoked only on Stage 3 abstentions
+  (`CASCADE_AGENT=1`, off by default). Its loop, guards and failure handling are unit
+  tested against a scripted model; how many items it recovers is unmeasured, because that
+  needs live API calls. It also cannot reach the 142 escalated items whose gold leaf was
+  missing from the shortlist but which Stage 3 labelled confidently instead of abstaining.
 - **Serving parity is bounded, not clean.** The endpoint reproduces routing exactly but
   not retrieval shortlists, at a measured ≤1.0% of micro. The cause is cross-device
   artefact provenance, not the serving layer — see above.
@@ -681,10 +688,10 @@ which is the one direction that costs money.
 
 ## Next
 
-1. **Build the second pass in `stage3_agent.py`** — the multi-turn loop with a taxonomy
-   search tool, run only on the residual this tier abstains on. It is the one component
-   that can recover the 9.4% of escalated items whose correct leaf was never retrieved,
-   and the evaluation harness to prove whether it does already exists.
+1. **Run the second pass live** — `python src/agent_pass2.py --limit 5`, read the token
+   counts, then run all 153 abstentions. It is the one component that can recover the 9.4%
+   of escalated items whose correct leaf was never retrieved; the loop exists, the
+   measurement does not.
 2. Widen S1's label space beyond 69 leaves, or put a linear model behind the classes
    DistilBERT cannot reach — the change the baseline comparison argues for.
 3. Fix abstention targeting.

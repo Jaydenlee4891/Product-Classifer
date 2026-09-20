@@ -2,7 +2,7 @@
 #
 # `fast` runs the serving-layer suites and the documentation check on a plain Python
 # install -- no torch, no transformers, no model weights. It finishes in well under a
-# minute, which is the point: 46 of the 67 assertions in this repository were written to
+# minute, which is the point: 98 of the 119 assertions in this repository were written to
 # be runnable without a GPU or a checkpoint, and that design decision is only worth
 # anything if something actually exercises it on a clean machine.
 #
@@ -38,6 +38,8 @@ jobs:
         run: python src/serve/test_graph.py
       - name: Endpoint tests (FastAPI)
         run: python src/serve/test_app.py
+      - name: Agent loop tests (scripted model)
+        run: python src/serve/test_agent.py
       - name: Endpoint tests (Django)
         run: python src/serve_django/test_django.py
       - name: Documentation matches the code

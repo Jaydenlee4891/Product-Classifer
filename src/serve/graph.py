@@ -37,7 +37,9 @@ report while looking like an improvement.
 """
 from __future__ import annotations
 
+import json
 import operator
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -64,6 +66,7 @@ class CascadeState(TypedDict, total=False):
     leaf: str | None
     stage: str
     llm_confidence: str | None
+    agent_steps: list[dict]
     trace: Annotated[list[dict], operator.add]
 
 
@@ -78,10 +81,15 @@ def _timed(name: str, fn):
     return node
 
 
-def build_graph(cascade, stage3: Stage3, k: int | None = None):
+def build_graph(cascade, stage3: Stage3, k: int | None = None, agent=None):
     """cascade: a pipeline.Cascade (or any object with the same four methods).
     Injected rather than constructed so the routing can be tested without loading 1 GB
-    of weights -- see serve/test_graph.py."""
+    of weights -- see serve/test_graph.py.
+
+    agent: an optional serve.agent.Stage3Agent. When given, an item Stage 3 ABSTAINED on
+    gets a second look from a bounded loop that can search the taxonomy. It is the only
+    consumer of an abstention; every other Stage 3 outcome ends the graph as before, and
+    with agent=None the graph is exactly what it was."""
     from langgraph.graph import END, START, StateGraph
     from recall import INSTRUCTION, assert_finite, item_text
 
@@ -133,11 +141,28 @@ def build_graph(cascade, stage3: Stage3, k: int | None = None):
             return {"stage": "S2", "llm_confidence": None}
         return {"leaf": d.leaf, "stage": "S3", "llm_confidence": d.confidence}
 
+    def agent_node(state):
+        # Fail closed: an error anywhere in the loop (network, a tool bug) leaves the item
+        # abstained. It must never take the request down, and it must never turn into a
+        # guess that is reported as an agent decision.
+        try:
+            r = agent.run(state["item"], np.array(state["shortlist_idx"]))
+        except Exception as e:                                   # noqa: BLE001
+            return {"stage": "S3-abstain", "leaf": None,
+                    "agent_steps": [{"error": True, "exception": type(e).__name__}]}
+        if r.leaf is None:
+            return {"stage": "S3-abstain", "leaf": None, "llm_confidence": r.confidence,
+                    "agent_steps": r.steps}
+        return {"leaf": r.leaf, "stage": "S3-agent", "llm_confidence": r.confidence,
+                "agent_steps": r.steps}
+
     g = StateGraph(CascadeState)
     g.add_node("s1", _timed("s1", s1))
     g.add_node("retrieve", _timed("retrieve", retrieve))
     g.add_node("rerank", _timed("rerank", rerank))
     g.add_node("stage3", _timed("stage3", stage3_node))
+    if agent is not None:
+        g.add_node("agent", _timed("agent", agent_node))
 
     g.add_edge(START, "s1")
     g.add_conditional_edges("s1", lambda s: "retrieve" if s["deferred"] else END,
@@ -146,7 +171,13 @@ def build_graph(cascade, stage3: Stage3, k: int | None = None):
     g.add_conditional_edges(
         "rerank", lambda s: END if stage3.cfg.provider == "none" else "stage3",
         {"stage3": "stage3", END: END})
-    g.add_edge("stage3", END)
+    if agent is None:
+        g.add_edge("stage3", END)
+    else:
+        g.add_conditional_edges(
+            "stage3", lambda s: "agent" if s.get("stage") == "S3-abstain" else END,
+            {"agent": "agent", END: END})
+        g.add_edge("agent", END)
     return g.compile()
 
 
@@ -155,11 +186,12 @@ class CascadeRuntime:
     cascade: Any
     stage3: Stage3
     graph: Any
+    agent: Any = None
 
     @classmethod
     def load(cls, data: str | Path = "data", device: str = "auto",
              provider: str = "cached", retriever_fp16: bool = False,
-             **s3kw) -> "CascadeRuntime":
+             agent: bool = False, **s3kw) -> "CascadeRuntime":
         """retriever_fp16 forces half precision for the bi-encoder on any backend.
 
         recall.load_model requests fp16 only on CUDA, so the cached embeddings in data/
@@ -169,6 +201,12 @@ class CascadeRuntime:
         neither offline run used. Setting this makes the serving path round the same way
         the cache did. It is not bit-identical to CUDA fp16, but it removes the precision
         gap rather than leaving it uncontrolled."""
+        # First, before any weights load: the second pass makes LIVE model calls even when
+        # Stage 3 replays cached answers (the cache has no second-pass entries), so a
+        # missing key should cost nothing rather than a 3GB load followed by a failure.
+        if agent and not os.environ.get("ANTHROPIC_API_KEY"):
+            raise SystemExit("agent=True needs ANTHROPIC_API_KEY: the second pass makes "
+                             "live model calls.")
         from pipeline import Cascade
         cascade = Cascade.load(data, device=device)
         if retriever_fp16:
@@ -179,7 +217,15 @@ class CascadeRuntime:
                 BI_MODEL, device=cascade.device,
                 model_kwargs={"torch_dtype": torch.float16})
         s3 = Stage3(Path(data), cascade.leaves, Stage3Config(provider=provider, **s3kw))
-        return cls(cascade, s3, build_graph(cascade, s3))
+        ag = None
+        if agent:
+            from serve.agent import AnthropicMessages, Stage3Agent, TaxonomyIndex, embed_from_cascade
+            docs_all = json.loads((Path(data) / "label_docs.json").read_text())
+            index = TaxonomyIndex(cascade.leaves, docs_all, cascade.label_emb,
+                                  embed_from_cascade(cascade))
+            ag = Stage3Agent(index, AnthropicMessages(model=s3.cfg.model,
+                                                      headers=s3._headers()))
+        return cls(cascade, s3, build_graph(cascade, s3, agent=ag), ag)
 
     @staticmethod
     def initial(item: dict, item_id: str | None = None) -> CascadeState:
@@ -187,9 +233,14 @@ class CascadeRuntime:
 
     def classify(self, item: dict, item_id: str | None = None) -> dict:
         s = self.graph.invoke(self.initial(item, item_id))
-        return {
+        out = {
             "leaf": s.get("leaf"), "stage": s.get("stage"), "text": s.get("text"),
             "s1_confidence": s.get("s1_conf"), "llm_confidence": s.get("llm_confidence"),
             "shortlist": s.get("shortlist"), "trace": s.get("trace", []),
             "total_ms": round(sum(t["ms"] for t in s.get("trace", [])), 2),
         }
+        # Present only when the second pass ran, so the response contract that both front
+        # ends share is unchanged for every item that never reaches it.
+        if s.get("agent_steps") is not None:
+            out["agent_steps"] = s["agent_steps"]
+        return out

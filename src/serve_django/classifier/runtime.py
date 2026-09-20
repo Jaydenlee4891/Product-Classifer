@@ -24,6 +24,7 @@ def get_runtime():
                     settings.CASCADE_DATA,
                     device=settings.CASCADE_DEVICE,
                     provider=settings.CASCADE_PROVIDER,
+                    agent=settings.CASCADE_AGENT,
                 )
     return _runtime
 

@@ -45,6 +45,9 @@ LOGGING = {
 CASCADE_DATA = os.environ.get("CASCADE_DATA", str(BASE_DIR.parent.parent / "data"))
 CASCADE_DEVICE = os.environ.get("CASCADE_DEVICE", "auto")
 CASCADE_PROVIDER = os.environ.get("CASCADE_PROVIDER", "cached")
+# Second-pass agent on Stage 3 abstentions. Off by default: it makes LIVE model
+# calls and needs ANTHROPIC_API_KEY. See src/serve/agent.py.
+CASCADE_AGENT = os.environ.get("CASCADE_AGENT", "") == "1"
 # Load the models in AppConfig.ready() instead of on first request. Correct for a single
 # long-lived process; wrong for a multi-worker pool, and wrong for management commands.
 CASCADE_PRELOAD = os.environ.get("CASCADE_PRELOAD", "") == "1"

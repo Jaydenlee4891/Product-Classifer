@@ -41,6 +41,9 @@ from pydantic import BaseModel, Field
 DATA = os.environ.get("CASCADE_DATA", "data")
 DEVICE = os.environ.get("CASCADE_DEVICE", "auto")
 PROVIDER = os.environ.get("CASCADE_PROVIDER", "cached")
+# Second-pass agent on Stage 3 abstentions. Off by default: it makes LIVE model
+# calls and needs ANTHROPIC_API_KEY. See serve/agent.py.
+AGENT = os.environ.get("CASCADE_AGENT", "") == "1"
 
 STATE: dict = {"rt": None, "warm": False, "load_s": None}
 
@@ -67,7 +70,7 @@ def get_runtime():
 async def lifespan(app: FastAPI):
     from serve.graph import CascadeRuntime
     t0 = time.perf_counter()
-    STATE["rt"] = CascadeRuntime.load(DATA, device=DEVICE, provider=PROVIDER)
+    STATE["rt"] = CascadeRuntime.load(DATA, device=DEVICE, provider=PROVIDER, agent=AGENT)
     STATE["load_s"] = round(time.perf_counter() - t0, 2)
     yield
     STATE["rt"] = None

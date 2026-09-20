@@ -12,17 +12,16 @@ stage3_agent.py for historical reasons and the tier is referred to as "the LLM t
 everywhere it is described. Do not call it an agent; a reader who checks main() will find
 one API call and stop believing the rest of the file.
 
-NOT BUILT: the second pass. The design below is real and the motivation is measured, but
-no code here implements it, and nothing downstream assumes it exists.
+THE SECOND PASS IS BUILT, IN serve/agent.py, AND HAS NOT BEEN RUN LIVE. Everything below
+this line about the first pass is still true: this file is one forced call, not an agent.
 
     Every stage is trapped inside the retriever's top-K. If the correct leaf was never
     retrieved -- 9.4% of escalated items at K=50, shortlist 10 -- no reranker, threshold
-    or prediction set can recover it. An agent that could SEARCH THE TAXONOMY could: it
-    is the only design in the cascade able to break the retrieval ceiling. It would take
-    the residual this pass abstains on (7.6% of escalated items, ~153 items), which is
-    small enough that a real multi-turn loop is affordable there and nowhere else.
-
-    That is a plan, not a feature. See README > Next.
+    or prediction set can recover it. serve/agent.py is a bounded loop that can SEARCH THE
+    TAXONOMY, run only on the residual this pass abstains on (7.6% of escalated items,
+    153 items), which is small enough that a multi-turn loop is affordable there and
+    nowhere else. It has unit tests against a scripted model; whether it recovers real
+    items is what `python src/agent_pass2.py` measures, and that has not been run.
 
 Two prompt decisions that are load-bearing, both testable with --ablate:
 
