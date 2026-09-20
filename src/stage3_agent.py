@@ -20,8 +20,9 @@ this line about the first pass is still true: this file is one forced call, not 
     or prediction set can recover it. serve/agent.py is a bounded loop that can SEARCH THE
     TAXONOMY, run only on the residual this pass abstains on (7.6% of escalated items,
     153 items), which is small enough that a multi-turn loop is affordable there and
-    nowhere else. It has unit tests against a scripted model; whether it recovers real
-    items is what `python src/agent_pass2.py` measures, and that has not been run.
+    nowhere else. It has unit tests against a scripted model and has been smoke-tested
+    live on 5 items; whether it recovers real items is what `python src/agent_pass2.py`
+    measures, and that has not been run on all 153.
 
 Two prompt decisions that are load-bearing, both testable with --ablate:
 

@@ -27,8 +27,10 @@ sys.path.insert(0, str(HERE.parent))
 # Importing test_graph installs the stub for `recall` (torch at module scope) and gives us
 # the same stub cascade and Stage 3 the routing tests use.
 from serve import test_graph as TG                            # noqa: E402
-from serve.agent import (AGENT_SYSTEM, MAX_STEPS, SEARCH_K_MAX, Reply,        # noqa: E402
-                         Stage3Agent, TaxonomyIndex)
+from types import SimpleNamespace                            # noqa: E402
+
+from serve.agent import (AGENT_SYSTEM, MAX_STEPS, SEARCH_K_MAX, TOOLS,       # noqa: E402
+                         AnthropicMessages, Reply, Stage3Agent, TaxonomyIndex)
 from serve.graph import CascadeRuntime, build_graph          # noqa: E402
 from serve.llm import Decision                               # noqa: E402
 
@@ -293,6 +295,55 @@ def test_graph():
     check("a confident S1 item never reaches the agent", ag.calls == 0 and out["stage"] == "S1")
 
 
+class FakeSDK:
+    """Records the keyword arguments create() was called with, and answers like the SDK:
+    block objects carrying fields the API does not want echoed back."""
+
+    def __init__(self):
+        self.kw, self.messages = None, self
+
+    def create(self, **kw):
+        self.kw = kw
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="tool_use", id="t1", name="search_taxonomy",
+                                     input={"query": "mouse"}, caller="extra-field"),
+                     SimpleNamespace(type="text", text="hi"),
+                     SimpleNamespace(type="thinking", thinking="dropped")],
+            usage=SimpleNamespace(input_tokens=11, output_tokens=3))
+
+
+def test_client():
+    print("\nthe real client adapter")
+    # A scripted model cannot catch this class of bug, and one shipped: the installed SDK
+    # (anthropic 1.4.0) has no `temperature` parameter, so the first live call raised
+    # TypeError before spending anything. The only honest check is against the real
+    # signature, so that is what this compares to.
+    import inspect
+    try:
+        from anthropic.resources.messages import Messages
+        params = inspect.signature(Messages.create).parameters
+        accepted = (None if any(p.kind is p.VAR_KEYWORD for p in params.values())
+                    else set(params) - {"self"})
+    except ImportError:
+        accepted = None
+
+    sdk = FakeSDK()
+    reply = AnthropicMessages(client=sdk).create(
+        "sys", [{"role": "user", "content": "x"}], TOOLS, {"type": "any"})
+    if accepted is None:
+        print("  SKIP  anthropic not installed: signature check not run")
+    else:
+        check("only passes arguments the installed SDK accepts", set(sdk.kw) <= accepted)
+    check("sends the system prompt, tools and tool choice through unchanged",
+          sdk.kw["system"] == "sys" and sdk.kw["tools"] is TOOLS
+          and sdk.kw["tool_choice"] == {"type": "any"})
+    check("rebuilds blocks as minimal dicts and drops what it does not use",
+          reply.blocks == [{"type": "tool_use", "id": "t1", "name": "search_taxonomy",
+                            "input": {"query": "mouse"}},
+                           {"type": "text", "text": "hi"}])
+    check("maps the SDK's token usage", reply.usage == {"input": 11, "output": 3})
+
+
 def test_runtime():
     print("\nresponse contract")
     c = TG.StubCascade(pred=0, pmax=0.5)
@@ -326,6 +377,7 @@ def main():
     test_stopping()
     test_guards()
     test_graph()
+    test_client()
     test_runtime()
     print("\n" + ("ALL PASS" if not FAILURES else f"{len(FAILURES)} FAILURES: {FAILURES}"))
     sys.exit(0 if not FAILURES else 1)

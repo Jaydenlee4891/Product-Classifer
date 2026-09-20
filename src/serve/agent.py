@@ -30,9 +30,12 @@ FAILURE POLICY. Any failure leaves the item abstained -- never a guess, and neve
 top-1 reported as an agent decision. The stage is 'S3-agent' only when the agent produced
 a valid label.
 
-STATUS. Built and unit-tested against a scripted model (serve/test_agent.py). NOT yet
-evaluated live: no result here says how often it recovers an item. That number comes from
-`python src/agent_pass2.py`, which spends API credit.
+STATUS. Built and unit-tested against a scripted model (serve/test_agent.py), and smoke
+tested live on 5 abstentions. That run found a bug the scripted tests could not (the
+installed SDK has no `temperature` parameter), which is why test_client() now checks the
+adapter against the real SDK signature. Five items say nothing about how often it
+recovers an item; that number comes from `python src/agent_pass2.py`, which spends API
+credit.
 """
 from __future__ import annotations
 
@@ -217,8 +220,12 @@ class AnthropicMessages:
         self._client = client
 
     def create(self, system, messages, tools, tool_choice) -> Reply:
+        # No temperature: the installed SDK (anthropic 1.4.0) rejects the argument, and
+        # Stage3._call_raw does not pass one either. The consequence is real -- sampling is
+        # the model's default, so two runs over the same items can differ. Compare runs by
+        # rates over the 153 items, not by expecting item-for-item agreement.
         r = self._client.messages.create(
-            model=self.model, max_tokens=self.max_tokens, temperature=0, system=system,
+            model=self.model, max_tokens=self.max_tokens, system=system,
             messages=messages, tools=tools, tool_choice=tool_choice)
         # Rebuilt as minimal dicts: SDK block objects carry extra fields, and the history
         # is sent back to the API on every turn.

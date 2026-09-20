@@ -414,7 +414,7 @@ src/serve/bench.py       per-tier latency, cold start excluded and reported sepa
 src/serve/diagnose_embedding.py   padding, batch-invariance and cache provenance probes
 src/serve/test_graph.py  26 routing assertions, no weights required
 src/serve/test_app.py    20 endpoint assertions, no weights required
-src/serve/test_agent.py  52 agent-loop assertions, scripted model, no weights or key required
+src/serve/test_agent.py  56 agent-loop assertions, scripted model, no weights or key required
 src/agent_pass2.py       evaluates the second pass on Stage 3's abstentions; --dry-run is free
 src/serve_django/        the same cascade behind Django — see its README for why
 src/serve_django/test_django.py  26 endpoint assertions, no weights required
@@ -501,7 +501,7 @@ produces a number is reimplemented: every node calls the same `Cascade` methods 
 offline evaluation calls, and the retrieval node is copied from `Cascade.predict`. The
 layer contributes routing, per-tier timing, and one rule — an abstention ends with **no
 label**, never a silent fallback to S2's top-1, matching `pipeline.evaluate`. Stage 3 is a
-swappable provider (hosted API, local model, or cached replay), and 98 assertions cover
+swappable provider (hosted API, local model, or cached replay), and 102 assertions cover
 routing, abstention, the HTTP contract and the agent loop without loading any weights.
 
 ```
@@ -651,11 +651,12 @@ which is the one direction that costs money.
 - **Stage 3 is a single structured LLM call, not an agent loop.** One forced tool call
   over a closed candidate set: no tool selection, no multi-turn state, no stopping
   criterion. It is referred to as the LLM tier throughout for that reason.
-- **The second-pass agent is built and has never been run live.** `src/serve/agent.py` is
+- **The second-pass agent is built and only smoke-tested live.** `src/serve/agent.py` is
   a bounded loop with a taxonomy-search tool, invoked only on Stage 3 abstentions
   (`CASCADE_AGENT=1`, off by default). Its loop, guards and failure handling are unit
-  tested against a scripted model; how many items it recovers is unmeasured, because that
-  needs live API calls. It also cannot reach the 142 escalated items whose gold leaf was
+  tested against a scripted model. It has been run live on 5 abstentions, which found a
+  bug no scripted test could (the installed SDK rejects a `temperature` argument) and says
+  nothing about how many items it recovers: that rate is unmeasured. It also cannot reach the 142 escalated items whose gold leaf was
   missing from the shortlist but which Stage 3 labelled confidently instead of abstaining.
 - **Serving parity is bounded, not clean.** The endpoint reproduces routing exactly but
   not retrieval shortlists, at a measured ≤1.0% of micro. The cause is cross-device
@@ -688,8 +689,9 @@ which is the one direction that costs money.
 
 ## Next
 
-1. **Run the second pass live** — `python src/agent_pass2.py --limit 5`, read the token
-   counts, then run all 153 abstentions. It is the one component that can recover the 9.4%
+1. **Run the second pass on all 153 abstentions** — `python src/agent_pass2.py`. The
+   5-item smoke test used every turn of its budget on every item, so budget the cost from
+   the full-budget path, and note that sampling is not deterministic. It is the one component that can recover the 9.4%
    of escalated items whose correct leaf was never retrieved; the loop exists, the
    measurement does not.
 2. Widen S1's label space beyond 69 leaves, or put a linear model behind the classes
