@@ -414,7 +414,7 @@ src/serve/diagnose_embedding.py   padding, batch-invariance and cache provenance
 src/serve/test_graph.py  26 routing assertions, no weights required
 src/serve/test_app.py    20 endpoint assertions, no weights required
 src/serve_django/        the same cascade behind Django — see its README for why
-src/serve_django/test_django.py  23 endpoint assertions, no weights required
+src/serve_django/test_django.py  26 endpoint assertions, no weights required
 ```
 
 `shortlist.py` exists because the shortlist was implemented twice and the two drifted — a

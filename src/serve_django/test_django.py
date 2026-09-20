@@ -26,9 +26,11 @@ os.environ.setdefault("CASCADE_DATA", str(HERE.parent.parent / "data"))
 import django                                                    # noqa: E402
 django.setup()
 
-from django.test import Client                                   # noqa: E402
+from django.apps import apps                                     # noqa: E402
+from django.test import Client, override_settings                # noqa: E402
 
 from classifier import runtime                                   # noqa: E402
+from classifier.apps import skip_reason                          # noqa: E402
 
 FAILURES = []
 
@@ -66,6 +68,40 @@ def main():
 
     rt = StubRuntime()
     runtime.reset_for_tests(rt)
+
+    print("\npreload (AppConfig.ready)")
+    cases = [  # argv, environ, should it preload?
+        (["manage.py", "runserver", "8001", "--noreload"], {}, True),
+        (["manage.py", "runserver", "8001"], {"RUN_MAIN": "true"}, True),
+        (["manage.py", "runserver", "8001"], {}, False),          # reloader parent
+        (["manage.py", "warm_cascade"], {}, True),
+        (["manage.py", "migrate"], {}, False),
+        (["manage.py", "migrate"], {"RUN_MAIN": "true"}, False),
+        (["gunicorn"], {}, True),                                 # no subcommand: a worker
+    ]
+    bad = [(a, e) for a, e, want in cases if (skip_reason(a, e) is None) != want]
+    check("skip_reason: only the runserver reloader parent and management commands skip",
+          not bad)
+
+    loads = []
+    real_get = runtime.get_runtime
+    runtime.get_runtime = lambda: loads.append(1)
+    real_argv, real_env = sys.argv, dict(os.environ)
+    try:
+        cfg = apps.get_app_config("classifier")
+        with override_settings(CASCADE_PRELOAD=True):
+            sys.argv = ["manage.py", "runserver", "8001"]
+            os.environ.pop("RUN_MAIN", None)
+            cfg.ready()
+            check("ready() does not load in the reloader parent", loads == [])
+            os.environ["RUN_MAIN"] = "true"
+            cfg.ready()
+            check("ready() loads exactly once in the reloader child", loads == [1])
+    finally:
+        runtime.get_runtime = real_get
+        sys.argv = real_argv
+        os.environ.clear()
+        os.environ.update(real_env)
 
     print("\nhealth")
     h = c.get("/health").json()
